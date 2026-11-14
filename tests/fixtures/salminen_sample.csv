@@ -1,7 +1,7 @@
 category,rating,label,text_
 Kitchen,5.0,OR,"This blender is great! I love it. Don't think I could go back."
-Kitchen,1.0,CG,"This product is amazing. Best purchase ever. Highly recommend this product."
 Electronics,4.0,OR,"The headphones arrived on time and the sound quality is solid for the price."
-Electronics,5.0,CG,"Excellent quality excellent quality. I am very happy with this item. Highly recommend."
 Home,3.0,OR,"It's okay. The chair is comfortable but the fabric feels cheaper than expected."
-Home,5.0,CG,"Wow wow wow! This is the best chair I have ever bought in my life. Amazing!"
+Kitchen,1.0,CG,"This product is amazing. Best purchase ever. Highly recommend this product."
+Electronics,5.0,CG,"Excellent quality excellent quality. I am very happy with this item. Highly recommend."
+Home,5.0,CG,
