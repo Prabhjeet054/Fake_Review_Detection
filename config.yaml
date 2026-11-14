@@ -1,0 +1,220 @@
+project:
+  name: fake-review-detector
+  seed: 42
+  version: "0.1.0"
+
+paths:
+  data_raw: data/raw
+  data_interim: data/interim
+  data_processed: data/processed
+  splits: data/processed/splits
+  figures: outputs/figures
+  metrics: outputs/metrics
+  models: outputs/models
+  embeddings: outputs/embeddings
+  logs: outputs/logs
+  contractions: src/resources/contractions.json
+  salminen_csv: data/raw/salminen/fake_reviews_dataset.csv
+  ott_dir: data/raw/ott
+
+columns:
+  id: review_id
+  text: text
+  clean_text: text_clean
+  label: label
+  label_name: label_name
+  source: source
+  category: category
+  rating: rating
+  polarity: polarity
+  hotel: hotel
+  group: group_id
+  split: split
+
+schema:
+  required_columns:
+    - review_id
+    - text
+    - label
+    - source
+  allowed_labels: [0, 1, 2]
+
+labels:
+  0: Genuine Human Review
+  1: Fake Human-Written Review
+  2: AI-Generated Review
+
+label_map:
+  salminen:
+    OR: 0
+    CG: 2
+  ott:
+    truthful: 0
+    deceptive: 1
+
+data:
+  salminen:
+    filename: fake_reviews_dataset.csv
+    text_column: text_
+    label_column: label
+    category_column: category
+    rating_column: rating
+    source_name: salminen
+  ott:
+    glob: "**/*.txt"
+    source_name: ott
+  interim_raw: data/interim/reviews_raw.csv
+  interim_clean: data/interim/reviews_clean.csv
+  interim_grouped: data/interim/reviews_grouped.csv
+
+preprocessing:
+  strip_html: true
+  expand_contractions: true
+  lowercase: true
+  collapse_whitespace: true
+  drop_empty: true
+  min_tokens: 1
+  keep_chars: ".,!?'"
+  extra_to_space: "-_/\\"
+  apostrophe_chars:
+    - "'"
+    - "’"
+    - "‘"
+    - "´"
+    - "`"
+
+dedup:
+  method: minhash
+  ngram: 3
+  ngram_level: char
+  threshold: 0.8
+  num_perm: 128
+  brute_force_limit: 400
+  lsh_num_perm: 128
+
+split:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+  stratify_by: label
+  group_by: group_id
+
+features:
+  tfidf:
+    ngram_range: [1, 2]
+    max_features: 10000
+    min_df: 2
+    max_df: 0.95
+    sublinear_tf: true
+  vectorizer_filename: tfidf_vectorizer.joblib
+
+baselines:
+  knn:
+    estimator: sklearn.neighbors.KNeighborsClassifier
+    params:
+      n_neighbors: 5
+      n_jobs: -1
+  decision_tree:
+    estimator: sklearn.tree.DecisionTreeClassifier
+    params:
+      max_depth: 20
+      min_samples_split: 4
+  random_forest:
+    estimator: sklearn.ensemble.RandomForestClassifier
+    params:
+      n_estimators: 200
+      max_depth: 20
+      n_jobs: -1
+  svm:
+    estimator: sklearn.svm.LinearSVC
+    params:
+      C: 1.0
+      max_iter: 2000
+  adaboost:
+    estimator: sklearn.ensemble.AdaBoostClassifier
+    params:
+      n_estimators: 100
+      learning_rate: 1.0
+      algorithm: SAMME
+  gradient_boosting:
+    estimator: sklearn.ensemble.GradientBoostingClassifier
+    params:
+      n_estimators: 100
+      learning_rate: 0.1
+      max_depth: 3
+
+model:
+  encoder: distilbert-base-uncased
+  max_length: 128
+  embedding_dim: 768
+  hidden_size: 256
+  dropout: 0.3
+  freeze_encoder: true
+  num_classes: 3
+  classifier_filename: review_classifier.pt
+  encoder_filename: distilbert_encoder.pt
+
+embed:
+  batch_size: 32
+  cache: true
+
+train:
+  optimizer: adam
+  lr: 0.0001
+  batch_size: 32
+  epochs: 50
+  loss: cross_entropy
+  device: auto
+  patience: null
+  weight_decay: 0.0
+  num_workers: 0
+  log_filename: train_history.csv
+
+evaluation:
+  average_modes: [macro, weighted]
+  grouped_binary:
+    genuine_vs_fake:
+      positive: [1, 2]
+      negative: [0]
+    human_vs_ai:
+      positive: [2]
+      negative: [0, 1]
+    genuine_vs_human_fake:
+      positive: [1]
+      negative: [0]
+      exclude: [2]
+    human_fake_vs_ai:
+      positive: [2]
+      negative: [1]
+      exclude: [0]
+
+plots:
+  dpi: 150
+  format: png
+  style: whitegrid
+  figsize: [8, 5]
+  title_fontsize: 12
+  palette: Set2
+
+logging:
+  level: INFO
+  filename: pipeline.log
+
+predict:
+  top_k: 3
+
+explain:
+  max_tokens: 40
+  mask_token: "[MASK]"
+  top_tokens: 10
+
+experiments:
+  metric: macro_f1
+  compare_baselines: true
+  compare_deep_model: true
+
+validation:
+  fail_on_leakage: true
+  fail_on_empty: true
+  fail_on_invalid_labels: true
+  min_per_class: 1
