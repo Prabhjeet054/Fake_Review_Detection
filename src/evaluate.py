@@ -1,151 +1,219 @@
-"""Classification metrics, including grouped binary evaluations."""
+# This is the only DistilBERT code that loads the test split.
+"""Evaluate the saved ClassifierHead on held-out test embeddings."""
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
+import torch
 from sklearn.metrics import (
-    accuracy_score,
     classification_report,
     cohen_kappa_score,
     confusion_matrix,
     precision_recall_fscore_support,
 )
+from torch import nn
 
-from src.config import label_names, load_config, parse_config_args, path_from_cfg
-from src.embed import load_embeddings
-from src.model import load_classifier
-from src.plots import plot_confusion_matrix
-from src.utils import get_device, save_json, seed_from_cfg, set_seed, setup_logging
+from src.config import AttrDict, load_config
+from src.embed import embedding_paths
+from src.model import ClassifierHead
+from src.schema import ID2LABEL
+from src.utils import ensure_dirs, get_device, get_logger, save_json, set_seed
+
+PRED_COLUMNS = ("id", "text_clean", "true", "pred", "p0", "p1", "p2")
 
 
-def _per_class_table(y_true: np.ndarray, y_pred: np.ndarray, cfg: dict[str, Any]) -> dict[str, dict[str, float]]:
-    """Precision/recall/F1 for each configured class."""
-    labels = list(range(int(cfg["model"]["num_classes"])))
+def class_names(config: AttrDict) -> list[str]:
+    """Return class names in id order 0..num_classes-1."""
+    n_classes = int(config.model.num_classes)
+    return [str(ID2LABEL[index]) for index in range(n_classes)]
+
+
+def load_best_head(config: AttrDict, device: str) -> nn.Module:
+    """Load outputs/models/head_best.pt onto device in eval mode."""
+    path = Path(config.paths.models_dir) / "head_best.pt"
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing {path}. Run python -m src.train first.")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    model = ClassifierHead(config)
+    model.load_state_dict(payload["state_dict"])
+    model.to(device)
+    model.eval()
+    return model
+
+
+def load_test_embeddings(config: AttrDict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load test X, y, and ids npy caches (the only DistilBERT test-split read)."""
+    paths = embedding_paths(config, "test")
+    for key in ("X", "y", "ids"):
+        if not paths[key].is_file():
+            raise FileNotFoundError(
+                f"Missing embedding file: {paths[key]}. Run python -m src.embed first."
+            )
+    X = np.load(paths["X"]).astype(np.float32, copy=False)
+    y = np.load(paths["y"]).astype(np.int64, copy=False)
+    ids = np.load(paths["ids"])
+    return X, y, ids
+
+
+def load_test_texts(config: AttrDict, ids: np.ndarray) -> list[str]:
+    """Return text_clean for embedding ids, in the same order as the npy cache."""
+    csv_path = Path(config.paths.splits_dir) / "test.csv"
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"Missing split file: {csv_path}. Run python -m src.split first.")
+    frame = pd.read_csv(csv_path, usecols=["id", "text_clean"])
+    by_id = {
+        int(key): str(text)
+        for key, text in zip(frame["id"].to_numpy(), frame["text_clean"].fillna("").astype(str))
+    }
+    missing = [item for item in ids if int(item) not in by_id]
+    if missing:
+        raise KeyError(f"test.csv is missing {len(missing)} embedding id(s), e.g. {missing[0]!r}.")
+    return [by_id[int(item)] for item in ids]
+
+
+@torch.no_grad()
+def predict_proba_and_labels(
+    model: nn.Module,
+    X: np.ndarray,
+    device: str,
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return softmax probabilities (n, C) and argmax labels (n,) in eval mode."""
+    model.eval()
+    chunks: list[np.ndarray] = []
+    size = int(batch_size)
+    for start in range(0, len(X), size):
+        batch = torch.from_numpy(np.asarray(X[start : start + size], dtype=np.float32)).to(device)
+        logits = model(batch)
+        chunks.append(torch.softmax(logits, dim=1).cpu().numpy().astype(np.float64))
+    if not chunks:
+        n_classes = int(model.fc2.out_features)
+        return np.zeros((0, n_classes), dtype=np.float64), np.zeros((0,), dtype=np.int64)
+    probs = np.vstack(chunks)
+    labels = probs.argmax(axis=1).astype(np.int64)
+    return probs, labels
+
+
+def compute_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    config: AttrDict,
+) -> dict[str, Any]:
+    """Accuracy, per-class scores, macro/weighted averages, kappa, and confusion matrix."""
+    y_true = np.asarray(y_true, dtype=np.int64)
+    y_pred = np.asarray(y_pred, dtype=np.int64)
+    labels = list(range(int(config.model.num_classes)))
+    names = class_names(config)
     precision, recall, f1, support = precision_recall_fscore_support(
         y_true,
         y_pred,
         labels=labels,
         zero_division=0,
     )
-    names = label_names(cfg)
-    table: dict[str, dict[str, float]] = {}
-    for index, class_id in enumerate(labels):
-        table[names[class_id]] = {
+    per_class = {
+        names[index]: {
             "precision": float(precision[index]),
             "recall": float(recall[index]),
             "f1": float(f1[index]),
             "support": int(support[index]),
         }
-    return table
+        for index in labels
+    }
+    matrix = confusion_matrix(y_true, y_pred, labels=labels)
+    n_test = int(len(y_true))
+    n_correct = int((y_true == y_pred).sum())
+    return {
+        "n_test": n_test,
+        "n_correct": n_correct,
+        "accuracy": float(n_correct / n_test) if n_test else 0.0,
+        "per_class": per_class,
+        "macro_precision": float(np.mean(precision)),
+        "macro_recall": float(np.mean(recall)),
+        "macro_f1": float(np.mean(f1)),
+        "weighted_precision": float(np.average(precision, weights=support) if n_test else 0.0),
+        "weighted_recall": float(np.average(recall, weights=support) if n_test else 0.0),
+        "weighted_f1": float(np.average(f1, weights=support) if n_test else 0.0),
+        "cohen_kappa": float(cohen_kappa_score(y_true, y_pred)) if n_test else 0.0,
+        "confusion_matrix": matrix.astype(int).tolist(),
+    }
 
 
-def grouped_binary_metrics(y_true: np.ndarray, y_pred: np.ndarray, cfg: dict[str, Any]) -> dict[str, dict[str, float]]:
-    """Collapse the 3-class problem into configured binary groupings."""
-    results: dict[str, dict[str, float]] = {}
-    for name, spec in cfg["evaluation"]["grouped_binary"].items():
-        positive = {int(v) for v in spec["positive"]}
-        negative = {int(v) for v in spec["negative"]}
-        exclude = {int(v) for v in spec.get("exclude", [])}
-        mask = np.ones(len(y_true), dtype=bool)
-        if exclude:
-            mask &= ~np.isin(y_true, list(exclude))
-            mask &= ~np.isin(y_pred, list(exclude))
-        keep_true = y_true[mask]
-        keep_pred = y_pred[mask]
-        if keep_true.size == 0:
-            results[name] = {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0, "support": 0}
-            continue
-        bin_true = np.isin(keep_true, list(positive)).astype(int)
-        bin_pred = np.isin(keep_pred, list(positive)).astype(int)
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            bin_true,
-            bin_pred,
-            average="binary",
-            zero_division=0,
-        )
-        results[name] = {
-            "accuracy": float(accuracy_score(bin_true, bin_pred)),
-            "precision": float(precision),
-            "recall": float(recall),
-            "f1": float(f1),
-            "support": int(len(bin_true)),
-            "positive_labels": sorted(positive),
-            "negative_labels": sorted(negative),
+def write_predictions(
+    ids: np.ndarray,
+    texts: list[str],
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    probs: np.ndarray,
+    path: Path,
+) -> Path:
+    """Write id, text_clean, true, pred, p0, p1, p2."""
+    frame = pd.DataFrame(
+        {
+            "id": ids,
+            "text_clean": texts,
+            "true": np.asarray(y_true, dtype=np.int64),
+            "pred": np.asarray(y_pred, dtype=np.int64),
+            "p0": probs[:, 0],
+            "p1": probs[:, 1],
+            "p2": probs[:, 2],
         }
-    return results
+    )
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
+    return path
 
 
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, cfg: dict[str, Any]) -> dict[str, Any]:
-    """Compute accuracy, per-class scores, averages, kappa, and confusion matrix."""
-    y_true = np.asarray(y_true, dtype=int)
-    y_pred = np.asarray(y_pred, dtype=int)
-    labels = list(range(int(cfg["model"]["num_classes"])))
+def evaluate_test(config: AttrDict | None = None) -> dict[str, Any]:
+    """Score head_best.pt on test embeddings and write CSV plus metrics.json."""
+    cfg = config if config is not None else load_config()
+    set_seed(int(cfg.seed))
+    ensure_dirs(cfg)
+    logger = get_logger(__name__)
+    device = get_device()
+    model = load_best_head(cfg, device)
+    X, y_true, ids = load_test_embeddings(cfg)
+    texts = load_test_texts(cfg, ids)
+    probs, y_pred = predict_proba_and_labels(model, X, device, int(cfg.training.batch_size))
+    metrics = compute_metrics(y_true, y_pred, cfg)
+    pred_path = Path(cfg.paths.metrics_dir) / "test_predictions.csv"
+    metrics_path = Path(cfg.paths.metrics_dir) / "metrics.json"
+    write_predictions(ids, texts, y_true, y_pred, probs, pred_path)
+    save_json(metrics, metrics_path)
     report = classification_report(
         y_true,
         y_pred,
-        labels=labels,
-        target_names=[label_names(cfg)[i] for i in labels],
-        output_dict=True,
+        labels=list(range(int(cfg.model.num_classes))),
+        target_names=class_names(cfg),
         zero_division=0,
+        digits=4,
     )
-    matrix = confusion_matrix(y_true, y_pred, labels=labels)
-    metrics: dict[str, Any] = {
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "per_class": _per_class_table(y_true, y_pred, cfg),
-        "macro_precision": float(report["macro avg"]["precision"]),
-        "macro_recall": float(report["macro avg"]["recall"]),
-        "macro_f1": float(report["macro avg"]["f1-score"]),
-        "weighted_precision": float(report["weighted avg"]["precision"]),
-        "weighted_recall": float(report["weighted avg"]["recall"]),
-        "weighted_f1": float(report["weighted avg"]["f1-score"]),
-        "cohen_kappa": float(cohen_kappa_score(y_true, y_pred)),
-        "confusion_matrix": matrix.astype(int).tolist(),
-        "grouped_binary": grouped_binary_metrics(y_true, y_pred, cfg),
-        "n": int(len(y_true)),
-    }
+    print(report)
+    logger.info(
+        "test n=%s correct=%s accuracy=%.4f macro_f1=%.4f kappa=%.4f -> %s",
+        metrics["n_test"],
+        metrics["n_correct"],
+        metrics["accuracy"],
+        metrics["macro_f1"],
+        metrics["cohen_kappa"],
+        metrics_path,
+    )
+    print(f"wrote {pred_path}")
+    print(f"wrote {metrics_path}")
     return metrics
 
 
-def save_metrics(metrics: dict[str, Any], cfg: dict[str, Any], stem: str) -> Any:
-    """Write a metrics JSON file under the configured metrics directory."""
-    return save_json(metrics, path_from_cfg(cfg, "paths.metrics") / f"{stem}.json")
-
-
-def predict_classifier(embeddings: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
-    """Load the trained head and predict class ids for embedding rows."""
-    import torch
-
-    device = get_device(cfg)
-    model = load_classifier(cfg, map_location=device)
-    model.to(device)
-    model.eval()
-    with torch.no_grad():
-        tensor = torch.from_numpy(np.asarray(embeddings, dtype=np.float32)).to(device)
-        logits = model(tensor)
-        preds = logits.argmax(dim=1).detach().cpu().numpy()
-    return preds.astype(int)
-
-
 def main(argv: list[str] | None = None) -> None:
-    """Evaluate the trained deep model on the test embeddings."""
-    args = parse_config_args(argv)
-    cfg = load_config(args.config)
-    set_seed(seed_from_cfg(cfg))
-    logger = setup_logging(cfg)
-    embeddings, labels, _ = load_embeddings(cfg, "test")
-    preds = predict_classifier(embeddings, cfg)
-    metrics = compute_metrics(labels, preds, cfg)
-    path = save_metrics(metrics, cfg, "deep_model_test")
-    plot_confusion_matrix(
-        np.array(metrics["confusion_matrix"]),
-        cfg,
-        stem="cm_deep_model_test",
-        title="Deep model test confusion matrix",
-    )
-    logger.info("Deep model test accuracy=%.4f macro_f1=%.4f", metrics["accuracy"], metrics["macro_f1"])
-    print(f"wrote {path} accuracy={metrics['accuracy']:.4f}")
+    """CLI: evaluate the best classification head on the test split."""
+    parser = argparse.ArgumentParser(description="Evaluate ClassifierHead on test embeddings.")
+    parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
+    args = parser.parse_args(argv)
+    evaluate_test(load_config(args.config))
 
 
 if __name__ == "__main__":
