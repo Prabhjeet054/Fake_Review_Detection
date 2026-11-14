@@ -1,4 +1,4 @@
-"""Grouped bar charts for classical baseline metrics."""
+"""Baseline bar charts and training history curves."""
 
 from __future__ import annotations
 
@@ -10,9 +10,24 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import MaxNLocator
 
 from src.config import AttrDict, load_config
 from src.utils import ensure_dirs
+
+CURVE_FIGSIZE = (8, 5)
+CURVE_DPI = 200
+TRAIN_COLOR = "#4C78A8"
+VAL_COLOR = "#E45756"
+CURVE_FONT = {
+    "font.family": "DejaVu Sans",
+    "font.size": 11,
+    "axes.titlesize": 13,
+    "axes.labelsize": 11,
+    "legend.fontsize": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+}
 
 CLASSIFIER_ORDER = ("KNN", "RF", "DT", "SVM", "AB", "GB")
 SHORT_NAMES = {
@@ -97,10 +112,78 @@ def plot_baselines(split: str, config: AttrDict | None = None) -> Path:
     return out_path
 
 
+def load_history(config: AttrDict | None = None) -> pd.DataFrame:
+    """Load outputs/metrics/history.csv."""
+    cfg = config if config is not None else load_config()
+    path = Path(cfg.paths.metrics_dir) / "history.csv"
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing {path}. Run python -m src.train first.")
+    return pd.read_csv(path)
+
+
+def best_epoch_from_history(history: pd.DataFrame) -> int:
+    """Return the epoch with the lowest validation loss."""
+    return int(history.loc[history["val_loss"].idxmin(), "epoch"])
+
+
+def _apply_curve_style(ax, title: str, ylabel: str, best_epoch: int, n_epochs: int) -> None:
+    """Apply the shared curve style: title, labels, 1..N x-axis, light grid, best-epoch line."""
+    ax.set_title(title)
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel(ylabel)
+    ax.set_xlim(1, n_epochs)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=10))
+    ax.axvline(best_epoch, color="#555555", linestyle=":", linewidth=1.6, zorder=1)
+    ax.grid(True, which="major", linestyle="-", linewidth=0.6, color="#d9d9d9")
+    ax.set_axisbelow(True)
+    ax.legend(frameon=True)
+
+
+def build_history_curve(kind: str, history: pd.DataFrame):
+    """Build an accuracy or loss curve figure; kind is 'accuracy' or 'loss'."""
+    if kind not in {"accuracy", "loss"}:
+        raise ValueError(f"kind must be 'accuracy' or 'loss', got {kind!r}")
+    n_epochs = int(history["epoch"].max())
+    best_epoch = best_epoch_from_history(history)
+    fig, ax = plt.subplots(figsize=CURVE_FIGSIZE)
+    x = history["epoch"].to_numpy()
+    if kind == "accuracy":
+        ax.plot(x, history["train_acc"], color=TRAIN_COLOR, linewidth=2.0, label="Training Accuracy")
+        ax.plot(x, history["val_acc"], color=VAL_COLOR, linewidth=2.0, label="Validation Accuracy")
+        _apply_curve_style(ax, "Training and validation accuracy", "Accuracy", best_epoch, n_epochs)
+    else:
+        ax.plot(x, history["train_loss"], color=TRAIN_COLOR, linewidth=2.0, label="Training Loss")
+        ax.plot(x, history["val_loss"], color=VAL_COLOR, linewidth=2.0, label="Validation Loss")
+        _apply_curve_style(ax, "Training and validation loss", "Loss", best_epoch, n_epochs)
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_history(config: AttrDict | None = None) -> dict[str, Path]:
+    """Read history.csv and save accuracy_curve.png and loss_curve.png."""
+    cfg = config if config is not None else load_config()
+    ensure_dirs(cfg)
+    history = load_history(cfg)
+    plt.rcParams.update(CURVE_FONT)
+    figures_dir = Path(cfg.paths.figures_dir)
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "accuracy": figures_dir / "accuracy_curve.png",
+        "loss": figures_dir / "loss_curve.png",
+    }
+    for kind, out_path in paths.items():
+        fig, _ax = build_history_curve(kind, history)
+        fig.savefig(out_path, dpi=CURVE_DPI, bbox_inches="tight")
+        plt.close(fig)
+        print(f"wrote {out_path}")
+    return paths
+
+
 def main() -> None:
-    """Write val and test baseline comparison figures."""
+    """Write baseline comparison figures and training history curves."""
     plot_baselines("val")
     plot_baselines("test")
+    plot_history()
 
 
 if __name__ == "__main__":
