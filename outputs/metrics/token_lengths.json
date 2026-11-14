@@ -1,0 +1,93 @@
+{
+  "model": "distilbert-base-uncased",
+  "max_length": 128,
+  "splits": {
+    "train": {
+      "0": {
+        "name": "Genuine Human",
+        "n": 1676,
+        "mean_tokens": 118.87887828162292,
+        "median_tokens": 85.0,
+        "max_tokens": 773,
+        "n_over_max_length": 565,
+        "share_over_max_length": 0.3371121718377088
+      },
+      "1": {
+        "name": "Fake Human-Written",
+        "n": 560,
+        "mean_tokens": 173.79285714285714,
+        "median_tokens": 152.0,
+        "max_tokens": 655,
+        "n_over_max_length": 351,
+        "share_over_max_length": 0.6267857142857143
+      },
+      "2": {
+        "name": "AI-Generated",
+        "n": 1120,
+        "mean_tokens": 73.64642857142857,
+        "median_tokens": 42.0,
+        "max_tokens": 349,
+        "n_over_max_length": 179,
+        "share_over_max_length": 0.15982142857142856
+      }
+    },
+    "val": {
+      "0": {
+        "name": "Genuine Human",
+        "n": 360,
+        "mean_tokens": 120.71666666666667,
+        "median_tokens": 88.0,
+        "max_tokens": 914,
+        "n_over_max_length": 131,
+        "share_over_max_length": 0.3638888888888889
+      },
+      "1": {
+        "name": "Fake Human-Written",
+        "n": 120,
+        "mean_tokens": 155.525,
+        "median_tokens": 135.5,
+        "max_tokens": 645,
+        "n_over_max_length": 66,
+        "share_over_max_length": 0.55
+      },
+      "2": {
+        "name": "AI-Generated",
+        "n": 240,
+        "mean_tokens": 69.30416666666666,
+        "median_tokens": 39.0,
+        "max_tokens": 326,
+        "n_over_max_length": 43,
+        "share_over_max_length": 0.17916666666666667
+      }
+    },
+    "test": {
+      "0": {
+        "name": "Genuine Human",
+        "n": 360,
+        "mean_tokens": 119.38333333333334,
+        "median_tokens": 86.5,
+        "max_tokens": 538,
+        "n_over_max_length": 132,
+        "share_over_max_length": 0.36666666666666664
+      },
+      "1": {
+        "name": "Fake Human-Written",
+        "n": 120,
+        "mean_tokens": 182.44166666666666,
+        "median_tokens": 155.5,
+        "max_tokens": 871,
+        "n_over_max_length": 71,
+        "share_over_max_length": 0.5916666666666667
+      },
+      "2": {
+        "name": "AI-Generated",
+        "n": 240,
+        "mean_tokens": 72.75416666666666,
+        "median_tokens": 44.5,
+        "max_tokens": 307,
+        "n_over_max_length": 33,
+        "share_over_max_length": 0.1375
+      }
+    }
+  }
+}
