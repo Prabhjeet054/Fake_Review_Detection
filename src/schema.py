@@ -1,77 +1,46 @@
-"""Canonical review schema and DataFrame validation."""
+"""Canonical label maps and DataFrame validation for reviews."""
 
 from __future__ import annotations
 
-from typing import Any
-
 import pandas as pd
 
-from src.config import label_names, load_config, parse_config_args
+from src.config import load_config
+
+_cfg = load_config()
+ID2LABEL: dict[int, str] = {int(key): str(value) for key, value in _cfg.labels.items()}
+LABEL2ID: dict[str, int] = {name: label_id for label_id, name in ID2LABEL.items()}
+REQUIRED_COLUMNS: list[str] = ["id", "text", "label", "source", "domain"]
+ALLOWED_LABELS: set[int] = set(ID2LABEL)
 
 
-def required_columns(cfg: dict[str, Any]) -> list[str]:
-    """Return required column names from config."""
-    return [str(col) for col in cfg["schema"]["required_columns"]]
-
-
-def allowed_labels(cfg: dict[str, Any]) -> set[int]:
-    """Return the set of valid integer labels."""
-    return {int(value) for value in cfg["schema"]["allowed_labels"]}
-
-
-def add_label_names(df: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
-    """Attach human-readable label names from config."""
-    label_col = cfg["columns"]["label"]
-    name_col = cfg["columns"]["label_name"]
-    mapping = label_names(cfg)
-    out = df.copy()
-    out[name_col] = out[label_col].map(mapping)
-    return out
-
-
-def validate_reviews(df: pd.DataFrame, cfg: dict[str, Any], *, require_all: bool = True) -> pd.DataFrame:
-    """Validate required columns, labels, and basic types; return a copy."""
-    if df.empty and require_all:
-        raise ValueError("Review DataFrame is empty.")
-    missing = [col for col in required_columns(cfg) if col not in df.columns]
+def validate_dataframe(df: pd.DataFrame, required: list[str] = REQUIRED_COLUMNS) -> pd.DataFrame:
+    """Raise ValueError if the review frame is invalid; otherwise return it unchanged."""
+    missing = [column for column in required if column not in df.columns]
     if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-    out = df.copy()
-    label_col = cfg["columns"]["label"]
-    out[label_col] = out[label_col].astype(int)
-    valid = allowed_labels(cfg)
-    invalid = sorted(set(out[label_col].unique()) - valid)
-    if invalid:
-        raise ValueError(f"Invalid labels {invalid}; expected {sorted(valid)}")
-    id_col = cfg["columns"]["id"]
-    out[id_col] = out[id_col].astype(str)
-    text_col = cfg["columns"]["text"]
-    out[text_col] = out[text_col].fillna("").astype(str)
-    if cfg["columns"]["label_name"] not in out.columns:
-        out = add_label_names(out, cfg)
-    return out
-
-
-def empty_reviews_frame(cfg: dict[str, Any]) -> pd.DataFrame:
-    """Return an empty DataFrame with the canonical columns."""
-    cols = required_columns(cfg) + [
-        cfg["columns"]["label_name"],
-        cfg["columns"]["category"],
-        cfg["columns"]["rating"],
-        cfg["columns"]["polarity"],
-        cfg["columns"]["hotel"],
-    ]
-    unique_cols = list(dict.fromkeys(cols))
-    return pd.DataFrame(columns=unique_cols)
+        raise ValueError(f"Missing required column(s): {', '.join(missing)}")
+    if "label" in df.columns:
+        labels = df["label"]
+        if labels.isna().any():
+            raise ValueError("Column 'label' contains missing values.")
+        invalid = sorted({int(value) for value in labels} - ALLOWED_LABELS)
+        if invalid:
+            raise ValueError(
+                f"Column 'label' contains values outside {sorted(ALLOWED_LABELS)}: {invalid}"
+            )
+    if "text" in df.columns:
+        empty_mask = df["text"].isna() | df["text"].astype(str).str.strip().eq("")
+        if empty_mask.any():
+            raise ValueError("Column 'text' contains NaN or empty values after strip.")
+    if "id" in df.columns and df["id"].duplicated().any():
+        raise ValueError("Column 'id' values are not unique.")
+    return df
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Print the canonical schema described by the config."""
-    args = parse_config_args(argv)
-    cfg = load_config(args.config)
-    print("required_columns:", required_columns(cfg))
-    print("allowed_labels:", sorted(allowed_labels(cfg)))
-    print("label_names:", label_names(cfg))
+    """Print the label maps and required columns."""
+    print("LABEL2ID=", LABEL2ID)
+    print("ID2LABEL=", ID2LABEL)
+    print("REQUIRED_COLUMNS=", REQUIRED_COLUMNS)
 
 
 if __name__ == "__main__":
