@@ -1,39 +1,78 @@
 """Tests for src.config."""
 
-from src.config import dump_config, get_nested, label_names, load_config, path_from_cfg, project_root
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from src.config import find_project_root, load_config, validate_config, to_attr_dict
 
 
-def test_load_config_attaches_root(cfg: dict) -> None:
-    """Loaded config includes the project root."""
-    assert "_project_root" in cfg
-    assert project_root(cfg).exists()
+def test_load_config_attribute_access() -> None:
+    """Loaded config supports nested attribute access."""
+    cfg = load_config()
+    assert cfg.seed == 42
+    assert cfg.model.name == "distilbert-base-uncased"
+    assert cfg.split.train + cfg.split.val + cfg.split.test == pytest.approx(1.0)
 
 
-def test_get_nested_and_paths(cfg: dict) -> None:
-    """Dotted lookup and path resolution work."""
-    assert get_nested(cfg, "project.seed") == 42
-    assert get_nested(cfg, "missing.key", "fallback") == "fallback"
-    figures = path_from_cfg(cfg, "paths.figures")
-    assert figures.name == "figures"
+def test_paths_are_absolute_and_independent_of_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Path values resolve against the project root even if cwd changes."""
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config()
+    root = find_project_root()
+    assert cfg.paths.raw_dir.is_absolute()
+    assert cfg.paths.raw_dir == (root / "data" / "raw").resolve()
+    assert cfg.data.salminen_file == (root / "data" / "raw" / "fake_reviews_dataset.csv").resolve()
+    assert cfg.data.ott_file == (root / "data" / "raw" / "deceptive-opinion.csv").resolve()
+    assert cfg.data.min_words == 5
 
 
-def test_label_names(cfg: dict) -> None:
-    """Label ids map to the three configured display names."""
-    names = label_names(cfg)
-    assert set(names) == {0, 1, 2}
-    assert "Genuine" in names[0]
+def test_missing_section_raises(tmp_path: Path) -> None:
+    """A config missing a required section raises ValueError."""
+    payload = yaml.safe_load((find_project_root() / "config.yaml").read_text(encoding="utf-8"))
+    del payload["split"]
+    path = tmp_path / "bad.yaml"
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="Missing required config section"):
+        load_config(path)
 
 
-def test_dump_config_hides_internal(cfg: dict) -> None:
-    """Serialized config does not include internal keys."""
-    dumped = dump_config(cfg)
-    assert "_project_root" not in dumped
+def test_split_sum_validation() -> None:
+    """Split ratios that do not sum to 1.0 raise ValueError."""
+    cfg = to_attr_dict(
+        {
+            "seed": 42,
+            "paths": {},
+            "data": {},
+            "labels": {0: "a", 1: "b", 2: "c"},
+            "split": {"train": 0.5, "val": 0.2, "test": 0.2},
+            "dedup": {},
+            "tfidf": {},
+            "model": {"num_classes": 3},
+            "training": {},
+        }
+    )
+    with pytest.raises(ValueError, match="split ratios must sum to 1.0"):
+        validate_config(cfg)
 
 
-def test_main_prints_seed(config_path: str, capsys) -> None:
-    """CLI prints the resolved project root."""
-    from src.config import main
-
-    main(["--config", config_path])
-    captured = capsys.readouterr().out
-    assert "project_root=" in captured
+def test_num_classes_must_match_labels() -> None:
+    """model.num_classes must equal the number of labels."""
+    cfg = to_attr_dict(
+        {
+            "seed": 42,
+            "paths": {},
+            "data": {},
+            "labels": {0: "a", 1: "b", 2: "c"},
+            "split": {"train": 0.7, "val": 0.15, "test": 0.15},
+            "dedup": {},
+            "tfidf": {},
+            "model": {"num_classes": 2},
+            "training": {},
+        }
+    )
+    with pytest.raises(ValueError, match="model.num_classes"):
+        validate_config(cfg)

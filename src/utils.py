@@ -1,50 +1,51 @@
-"""Shared helpers for seeding, logging, IO, and device selection."""
+"""Seeding, device selection, logging, directories, and JSON helpers."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import random
 from pathlib import Path
 from typing import Any
 
-import joblib
 import numpy as np
-import pandas as pd
+import torch
 
-from src.config import load_config, parse_config_args, path_from_cfg
+from src.config import load_config
 
 
 def set_seed(seed: int) -> None:
-    """Seed Python, NumPy, and Torch (if available) for reproducibility."""
+    """Seed random, NumPy, and Torch (CPU and CUDA) and make cuDNN deterministic."""
     random.seed(seed)
     np.random.seed(seed)
-    try:
-        import torch
-
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    except ImportError:
-        pass
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
-def ensure_dir(path: str | Path) -> Path:
-    """Create a directory (and parents) if it does not exist."""
-    directory = Path(path)
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+def get_device() -> str:
+    """Return 'cuda', 'mps', or 'cpu' depending on what is available."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
-def setup_logging(cfg: dict[str, Any]) -> logging.Logger:
-    """Configure a project logger that writes to stdout and the log file."""
-    log_dir = ensure_dir(path_from_cfg(cfg, "paths.logs"))
-    log_path = log_dir / cfg["logging"]["filename"]
-    logger = logging.getLogger("fake_review_detector")
-    logger.setLevel(getattr(logging, str(cfg["logging"]["level"]).upper()))
-    logger.handlers.clear()
+def get_logger(name: str) -> logging.Logger:
+    """Return a logger that writes to the console and to outputs/logs/run.log."""
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    if logger.handlers:
+        return logger
+    cfg = load_config()
+    log_dir = Path(cfg.paths.logs_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "run.log"
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setFormatter(formatter)
@@ -56,12 +57,35 @@ def setup_logging(cfg: dict[str, Any]) -> logging.Logger:
     return logger
 
 
-def save_json(data: Any, path: str | Path) -> Path:
-    """Write JSON to disk with UTF-8 encoding."""
+def ensure_dirs(config: Any) -> None:
+    """Create every directory listed in config.paths."""
+    paths = config.paths
+    values = paths.values() if hasattr(paths, "values") else vars(paths).values()
+    for raw in values:
+        Path(raw).mkdir(parents=True, exist_ok=True)
+
+
+def _json_default(obj: Any) -> Any:
+    """Convert numpy types (and Path) into JSON-serializable values."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, Path):
+        return str(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def save_json(obj: Any, path: str | Path) -> Path:
+    """Write JSON to disk, converting numpy types as needed."""
     out = Path(path)
-    ensure_dir(out.parent)
+    out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, default=str)
+        json.dump(obj, handle, indent=2, default=_json_default)
     return out
 
 
@@ -71,71 +95,19 @@ def load_json(path: str | Path) -> Any:
         return json.load(handle)
 
 
-def save_joblib(obj: Any, path: str | Path) -> Path:
-    """Serialize an object with joblib."""
-    out = Path(path)
-    ensure_dir(out.parent)
-    joblib.dump(obj, out)
-    return out
-
-
-def load_joblib(path: str | Path) -> Any:
-    """Load a joblib object."""
-    return joblib.load(Path(path))
-
-
-def save_dataframe(df: pd.DataFrame, path: str | Path) -> Path:
-    """Save a DataFrame as CSV or parquet based on the suffix."""
-    out = Path(path)
-    ensure_dir(out.parent)
-    if out.suffix == ".parquet":
-        df.to_parquet(out, index=False)
-    else:
-        df.to_csv(out, index=False)
-    return out
-
-
-def load_dataframe(path: str | Path) -> pd.DataFrame:
-    """Load a DataFrame from CSV or parquet."""
-    src = Path(path)
-    if not src.exists():
-        raise FileNotFoundError(f"Data file not found: {src}")
-    if src.suffix == ".parquet":
-        return pd.read_parquet(src)
-    return pd.read_csv(src)
-
-
-def get_device(cfg: dict[str, Any]) -> str:
-    """Select cuda, mps, or cpu from config, with auto-detection."""
-    preference = str(cfg["train"]["device"]).lower()
-    try:
-        import torch
-    except ImportError:
-        return "cpu"
-    if preference != "auto":
-        return preference
-    if torch.cuda.is_available():
-        return "cuda"
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
-
-
-def seed_from_cfg(cfg: dict[str, Any]) -> int:
-    """Return the configured global seed."""
-    return int(cfg["project"]["seed"])
-
-
 def main(argv: list[str] | None = None) -> None:
-    """Apply the configured seed and report the selected device."""
-    args = parse_config_args(argv)
+    """Seed RNGs from config, create output dirs, and log the selected device."""
+    parser = argparse.ArgumentParser(description="Utilities smoke-check.")
+    parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
+    args = parser.parse_args(argv)
     cfg = load_config(args.config)
-    seed = seed_from_cfg(cfg)
-    set_seed(seed)
-    logger = setup_logging(cfg)
-    logger.info("seed=%s device=%s", seed, get_device(cfg))
-    print(f"seed={seed}")
-    print(f"device={get_device(cfg)}")
+    set_seed(int(cfg.seed))
+    ensure_dirs(cfg)
+    logger = get_logger("fake_review_detector")
+    device = get_device()
+    logger.info("seed=%s device=%s", cfg.seed, device)
+    print(f"seed={cfg.seed}")
+    print(f"device={device}")
 
 
 if __name__ == "__main__":

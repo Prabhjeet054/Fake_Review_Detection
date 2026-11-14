@@ -1,49 +1,67 @@
 """Tests for src.utils."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
-import pandas as pd
+import numpy as np
+import pytest
 
-from src.utils import (
-    ensure_dir,
-    get_device,
-    load_dataframe,
-    load_json,
-    save_dataframe,
-    save_json,
-    seed_from_cfg,
-    set_seed,
-    setup_logging,
-)
+from src.config import AttrDict, load_config
+from src.utils import ensure_dirs, get_device, get_logger, load_json, save_json, set_seed
 
 
 def test_set_seed_is_deterministic() -> None:
-    """The same seed yields the same numpy draw."""
-    import numpy as np
+    """The same seed yields the same NumPy and Torch draws."""
+    import torch
 
     set_seed(42)
-    first = np.random.rand(3)
+    first_np = np.random.rand(3)
+    first_th = torch.rand(3)
     set_seed(42)
-    second = np.random.rand(3)
-    assert (first == second).all()
+    second_np = np.random.rand(3)
+    second_th = torch.rand(3)
+    assert np.allclose(first_np, second_np)
+    assert torch.allclose(first_th, second_th)
 
 
-def test_json_and_dataframe_roundtrip(tmp_path: Path) -> None:
-    """JSON and CSV helpers round-trip data."""
-    payload = {"a": 1}
-    json_path = save_json(payload, tmp_path / "x.json")
-    assert load_json(json_path)["a"] == 1
-    frame = pd.DataFrame({"n": [1, 2]})
-    csv_path = save_dataframe(frame, tmp_path / "x.csv")
-    loaded = load_dataframe(csv_path)
-    assert list(loaded["n"]) == [1, 2]
+def test_get_device_known_value() -> None:
+    """Device is one of the supported backend names."""
+    assert get_device() in {"cuda", "mps", "cpu"}
 
 
-def test_ensure_dir_and_logging(cfg: dict) -> None:
-    """Logging creates the configured log file."""
-    log_dir = ensure_dir(Path(cfg["_project_root"]) / "outputs" / "logs")
-    logger = setup_logging(cfg)
-    logger.info("hello")
-    assert log_dir.exists()
-    assert seed_from_cfg(cfg) == 42
-    assert get_device(cfg) in {"cpu", "cuda", "mps"}
+def test_ensure_dirs_creates_path_entries(tmp_path: Path) -> None:
+    """ensure_dirs creates every directory in config.paths."""
+    nested = tmp_path / "a" / "b"
+    config = AttrDict(paths=AttrDict(one=tmp_path / "one", nested=nested))
+    ensure_dirs(config)
+    assert (tmp_path / "one").is_dir()
+    assert nested.is_dir()
+
+
+def test_get_logger_writes_run_log() -> None:
+    """Logger emits to the console handler and outputs/logs/run.log."""
+    cfg = load_config()
+    ensure_dirs(cfg)
+    logger = get_logger("test_structure_logger")
+    logger.info("structure-check")
+    log_path = Path(cfg.paths.logs_dir) / "run.log"
+    assert log_path.is_file()
+    assert "structure-check" in log_path.read_text(encoding="utf-8")
+
+
+def test_save_and_load_json_numpy_types(tmp_path: Path) -> None:
+    """JSON helpers round-trip numpy scalars and arrays."""
+    payload = {
+        "count": np.int64(3),
+        "score": np.float32(1.5),
+        "ok": np.bool_(True),
+        "vector": np.array([1, 2, 3]),
+    }
+    path = tmp_path / "out.json"
+    save_json(payload, path)
+    loaded = load_json(path)
+    assert loaded["count"] == 3
+    assert loaded["score"] == pytest.approx(1.5)
+    assert loaded["ok"] is True
+    assert loaded["vector"] == [1, 2, 3]

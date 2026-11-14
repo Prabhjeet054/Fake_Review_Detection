@@ -11,7 +11,6 @@ import pytest
 import yaml
 
 from src.config import load_config
-from src.schema import add_label_names
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -81,6 +80,8 @@ def config_path(cfg: dict[str, Any]) -> str:
 @pytest.fixture
 def reviews_df(cfg: dict[str, Any]) -> pd.DataFrame:
     """Build a 3-class synthetic corpus large enough for a 70/15/15 split."""
+    from src.schema import add_label_names
+
     columns = cfg["columns"]
     rows: list[dict[str, Any]] = []
     templates = {
