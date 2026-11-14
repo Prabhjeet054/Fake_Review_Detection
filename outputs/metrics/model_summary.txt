@@ -1,0 +1,80 @@
+Layer                                                    Output shape             Params  Trainable
+---------------------------------------------------------------------------------------------------
+encoder.embeddings.word_embeddings                       (2, 128, 768)        23,440,896         no
+encoder.embeddings.position_embeddings                   (1, 128, 768)           393,216         no
+encoder.embeddings.LayerNorm                             (2, 128, 768)             1,536         no
+encoder.embeddings.dropout                               (2, 128, 768)                 0         no
+encoder.transformer.layer.0.attention.q_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.0.attention.k_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.0.attention.v_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.0.attention.out_lin            (2, 128, 768)           590,592         no
+encoder.transformer.layer.0.attention.dropout            -                             0         no
+encoder.transformer.layer.0.sa_layer_norm                (2, 128, 768)             1,536         no
+encoder.transformer.layer.0.ffn.dropout                  (2, 128, 768)                 0         no
+encoder.transformer.layer.0.ffn.lin1                     (2, 128, 3072)        2,362,368         no
+encoder.transformer.layer.0.ffn.lin2                     (2, 128, 768)         2,360,064         no
+encoder.transformer.layer.0.ffn.activation               (2, 128, 3072)                0         no
+encoder.transformer.layer.0.output_layer_norm            (2, 128, 768)             1,536         no
+encoder.transformer.layer.1.attention.q_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.1.attention.k_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.1.attention.v_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.1.attention.out_lin            (2, 128, 768)           590,592         no
+encoder.transformer.layer.1.attention.dropout            -                             0         no
+encoder.transformer.layer.1.sa_layer_norm                (2, 128, 768)             1,536         no
+encoder.transformer.layer.1.ffn.dropout                  (2, 128, 768)                 0         no
+encoder.transformer.layer.1.ffn.lin1                     (2, 128, 3072)        2,362,368         no
+encoder.transformer.layer.1.ffn.lin2                     (2, 128, 768)         2,360,064         no
+encoder.transformer.layer.1.ffn.activation               (2, 128, 3072)                0         no
+encoder.transformer.layer.1.output_layer_norm            (2, 128, 768)             1,536         no
+encoder.transformer.layer.2.attention.q_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.2.attention.k_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.2.attention.v_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.2.attention.out_lin            (2, 128, 768)           590,592         no
+encoder.transformer.layer.2.attention.dropout            -                             0         no
+encoder.transformer.layer.2.sa_layer_norm                (2, 128, 768)             1,536         no
+encoder.transformer.layer.2.ffn.dropout                  (2, 128, 768)                 0         no
+encoder.transformer.layer.2.ffn.lin1                     (2, 128, 3072)        2,362,368         no
+encoder.transformer.layer.2.ffn.lin2                     (2, 128, 768)         2,360,064         no
+encoder.transformer.layer.2.ffn.activation               (2, 128, 3072)                0         no
+encoder.transformer.layer.2.output_layer_norm            (2, 128, 768)             1,536         no
+encoder.transformer.layer.3.attention.q_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.3.attention.k_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.3.attention.v_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.3.attention.out_lin            (2, 128, 768)           590,592         no
+encoder.transformer.layer.3.attention.dropout            -                             0         no
+encoder.transformer.layer.3.sa_layer_norm                (2, 128, 768)             1,536         no
+encoder.transformer.layer.3.ffn.dropout                  (2, 128, 768)                 0         no
+encoder.transformer.layer.3.ffn.lin1                     (2, 128, 3072)        2,362,368         no
+encoder.transformer.layer.3.ffn.lin2                     (2, 128, 768)         2,360,064         no
+encoder.transformer.layer.3.ffn.activation               (2, 128, 3072)                0         no
+encoder.transformer.layer.3.output_layer_norm            (2, 128, 768)             1,536         no
+encoder.transformer.layer.4.attention.q_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.4.attention.k_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.4.attention.v_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.4.attention.out_lin            (2, 128, 768)           590,592         no
+encoder.transformer.layer.4.attention.dropout            -                             0         no
+encoder.transformer.layer.4.sa_layer_norm                (2, 128, 768)             1,536         no
+encoder.transformer.layer.4.ffn.dropout                  (2, 128, 768)                 0         no
+encoder.transformer.layer.4.ffn.lin1                     (2, 128, 3072)        2,362,368         no
+encoder.transformer.layer.4.ffn.lin2                     (2, 128, 768)         2,360,064         no
+encoder.transformer.layer.4.ffn.activation               (2, 128, 3072)                0         no
+encoder.transformer.layer.4.output_layer_norm            (2, 128, 768)             1,536         no
+encoder.transformer.layer.5.attention.q_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.5.attention.k_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.5.attention.v_lin              (2, 128, 768)           590,592         no
+encoder.transformer.layer.5.attention.out_lin            (2, 128, 768)           590,592         no
+encoder.transformer.layer.5.attention.dropout            -                             0         no
+encoder.transformer.layer.5.sa_layer_norm                (2, 128, 768)             1,536         no
+encoder.transformer.layer.5.ffn.dropout                  (2, 128, 768)                 0         no
+encoder.transformer.layer.5.ffn.lin1                     (2, 128, 3072)        2,362,368         no
+encoder.transformer.layer.5.ffn.lin2                     (2, 128, 768)         2,360,064         no
+encoder.transformer.layer.5.ffn.activation               (2, 128, 3072)                0         no
+encoder.transformer.layer.5.output_layer_norm            (2, 128, 768)             1,536         no
+head.fc1                                                 (2, 256)                196,864        yes
+head.relu                                                (2, 256)                      0         no
+head.dropout                                             (2, 256)                      0         no
+head.fc2                                                 (2, 3)                      771        yes
+---------------------------------------------------------------------------------------------------
+Total params          66,560,515
+Trainable params      197,635
+Non-trainable params  66,362,880
