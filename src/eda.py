@@ -1,83 +1,180 @@
-"""Exploratory summaries and figures for the processed reviews."""
+"""Exploratory figures and summary statistics for the cleaned reviews."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections import Counter
+from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
-from src.config import label_names, load_config, parse_config_args, path_from_cfg
-from src.plots import plot_class_distribution, plot_length_distribution
-from src.utils import load_dataframe, save_json, seed_from_cfg, set_seed, setup_logging
+from src.config import AttrDict, load_config
+from src.schema import ID2LABEL
+from src.utils import ensure_dirs, save_json, set_seed
+
+STOP_WORDS = {word.lower() for word in ENGLISH_STOP_WORDS}
 
 
-def length_stats(series: pd.Series) -> dict[str, float]:
-    """Compute token-length summary statistics."""
-    lengths = series.fillna("").astype(str).str.split().map(len)
-    if lengths.empty:
-        return {"count": 0, "mean": 0.0, "std": 0.0, "min": 0.0, "median": 0.0, "max": 0.0}
+def _class_name(label: int) -> str:
+    """Return the configured display name for a label id."""
+    return ID2LABEL.get(int(label), str(label))
+
+
+def _word_count(text: str) -> int:
+    """Return the number of whitespace-separated tokens."""
+    stripped = str(text).strip()
+    if not stripped:
+        return 0
+    return len(stripped.split())
+
+
+def _freq_tokens(text: str) -> list[str]:
+    """Return alphabetic tokens with English stop words removed."""
+    tokens: list[str] = []
+    for raw in str(text).split():
+        token = raw.strip(".,!?'").lower()
+        if token and token.isalpha() and token not in STOP_WORDS:
+            tokens.append(token)
+    return tokens
+
+
+def _crosstab_dict(df: pd.DataFrame, rows: str, cols: str) -> dict[str, dict[str, int]]:
+    """Return a JSON-friendly nested count table."""
+    table = pd.crosstab(df[rows], df[cols])
     return {
-        "count": int(lengths.count()),
-        "mean": float(lengths.mean()),
-        "std": float(lengths.std(ddof=0)),
-        "min": float(lengths.min()),
-        "median": float(lengths.median()),
-        "max": float(lengths.max()),
+        str(row): {str(col): int(table.loc[row, col]) for col in table.columns}
+        for row in table.index
     }
 
 
-def summarize_corpus(df: pd.DataFrame, cfg: dict[str, Any]) -> dict[str, Any]:
-    """Build a JSON-serializable EDA summary."""
-    label_col = cfg["columns"]["label"]
-    source_col = cfg["columns"]["source"]
-    text_col = cfg["columns"]["clean_text"] if cfg["columns"]["clean_text"] in df.columns else cfg["columns"]["text"]
-    names = label_names(cfg)
-    counts = df[label_col].value_counts().sort_index()
-    by_source = pd.crosstab(df[source_col], df[label_col]).to_dict() if source_col in df.columns else {}
+def top_words_per_class(df: pd.DataFrame, n: int = 20) -> dict[str, list[list[str | int]]]:
+    """Return the n most frequent non-stop words per class."""
+    result: dict[str, list[list[str | int]]] = {}
+    for label, group in df.groupby("label"):
+        counts = Counter()
+        for text in group["text_clean"].fillna(""):
+            counts.update(_freq_tokens(text))
+        result[str(int(label))] = [[word, int(count)] for word, count in counts.most_common(n)]
+    return result
+
+
+def build_eda_summary(df: pd.DataFrame) -> dict:
+    """Compute class counts, length stats, crosstabs, and top words."""
+    work = df.copy()
+    work["word_count"] = work["text_clean"].fillna("").map(_word_count)
+    counts = work["label"].value_counts().sort_index()
+    word_stats: dict[str, dict[str, float | int]] = {}
+    for label, group in work.groupby("label"):
+        lengths = group["word_count"]
+        word_stats[str(int(label))] = {
+            "name": _class_name(int(label)),
+            "mean": float(lengths.mean()) if len(lengths) else 0.0,
+            "median": float(lengths.median()) if len(lengths) else 0.0,
+            "max": int(lengths.max()) if len(lengths) else 0,
+        }
     return {
-        "n_reviews": int(len(df)),
-        "n_groups": int(df[cfg["columns"]["group"]].nunique()) if cfg["columns"]["group"] in df.columns else None,
-        "class_counts": {names.get(int(k), str(k)): int(v) for k, v in counts.items()},
-        "source_counts": df[source_col].value_counts().to_dict() if source_col in df.columns else {},
-        "source_by_label": {str(k): {str(ik): int(iv) for ik, iv in v.items()} for k, v in by_source.items()},
-        "length": length_stats(df[text_col]),
-        "split_counts": df[cfg["columns"]["split"]].value_counts().to_dict()
-        if cfg["columns"]["split"] in df.columns
-        else {},
+        "n_rows": int(len(work)),
+        "counts_per_class": {
+            str(int(label)): {"name": _class_name(int(label)), "count": int(count)}
+            for label, count in counts.items()
+        },
+        "word_count_per_class": word_stats,
+        "label_x_domain": _crosstab_dict(work, "label", "domain"),
+        "label_x_source": _crosstab_dict(work, "label", "source"),
+        "top_words_per_class": top_words_per_class(work),
     }
 
 
-def load_all_splits(cfg: dict[str, Any]) -> pd.DataFrame:
-    """Load train/val/test CSVs if present, else the grouped interim file."""
-    split_dir = path_from_cfg(cfg, "paths.splits")
-    frames: list[pd.DataFrame] = []
-    for name in ("train", "val", "test"):
-        path = split_dir / f"{name}.csv"
-        if path.exists():
-            frames.append(load_dataframe(path))
-    if frames:
-        return pd.concat(frames, ignore_index=True)
-    grouped = path_from_cfg(cfg, "data.interim_grouped")
-    if grouped.exists():
-        return load_dataframe(grouped)
-    raise FileNotFoundError("No split or grouped data found for EDA.")
+def plot_class_distribution(df: pd.DataFrame, out_path: Path) -> Path:
+    """Write a bar chart of class counts with names on the x-axis and counts on the bars."""
+    counts = df["label"].value_counts().sort_index()
+    names = [_class_name(int(label)) for label in counts.index]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(names, counts.to_numpy())
+    ax.set_xlabel("Class")
+    ax.set_ylabel("Count")
+    ax.set_title("Class distribution")
+    for bar, count in zip(bars, counts.to_numpy()):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            str(int(count)),
+            ha="center",
+            va="bottom",
+        )
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Write EDA metrics JSON and standard figures."""
-    args = parse_config_args(argv)
-    cfg = load_config(args.config)
-    set_seed(seed_from_cfg(cfg))
-    logger = setup_logging(cfg)
-    df = load_all_splits(cfg)
-    summary = summarize_corpus(df, cfg)
-    metrics_dir = path_from_cfg(cfg, "paths.metrics")
-    out_json = save_json(summary, metrics_dir / "eda_summary.json")
-    text_col = cfg["columns"]["clean_text"] if cfg["columns"]["clean_text"] in df.columns else cfg["columns"]["text"]
-    plot_class_distribution(df, cfg, "eda_class_distribution")
-    plot_length_distribution(df, cfg, text_col, "eda_length_distribution")
-    logger.info("EDA summary -> %s", out_json)
-    print(f"wrote {out_json}")
+def plot_length_distribution(df: pd.DataFrame, out_path: Path) -> Path:
+    """Write a box plot of word count per class."""
+    work = df.copy()
+    work["word_count"] = work["text_clean"].fillna("").map(_word_count)
+    work["class_name"] = work["label"].map(lambda value: _class_name(int(value)))
+    order = [_class_name(int(label)) for label in sorted(work["label"].unique())]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.boxplot(data=work, x="class_name", y="word_count", order=order, ax=ax)
+    ax.set_xlabel("Class")
+    ax.set_ylabel("Word count")
+    ax.set_title("Review length by class")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def warn_single_domain_classes(df: pd.DataFrame) -> list[int]:
+    """Print a WARNING for each class whose rows all come from one domain."""
+    flagged: list[int] = []
+    for label, group in df.groupby("label"):
+        domains = sorted({str(value) for value in group["domain"].dropna().unique()})
+        if len(domains) == 1:
+            label_id = int(label)
+            flagged.append(label_id)
+            print(
+                f"WARNING: class {label_id} ({_class_name(label_id)}) has rows from a single "
+                f"domain ({domains[0]}). This is a shortcut risk: the model could learn the "
+                f"domain instead of the class."
+            )
+    return flagged
+
+
+def run_eda(df: pd.DataFrame, config: AttrDict | None = None) -> dict:
+    """Write EDA figures, metrics JSON, and domain-shortcut warnings."""
+    cfg = config if config is not None else load_config()
+    ensure_dirs(cfg)
+    figures_dir = Path(cfg.paths.figures_dir)
+    metrics_dir = Path(cfg.paths.metrics_dir)
+    plot_class_distribution(df, figures_dir / "class_distribution.png")
+    plot_length_distribution(df, figures_dir / "length_distribution.png")
+    summary = build_eda_summary(df)
+    save_json(summary, metrics_dir / "eda_summary.json")
+    warn_single_domain_classes(df)
+    print(f"wrote {figures_dir / 'class_distribution.png'}")
+    print(f"wrote {figures_dir / 'length_distribution.png'}")
+    print(f"wrote {metrics_dir / 'eda_summary.json'}")
+    return summary
+
+
+def main() -> None:
+    """Read cleaned.csv and write EDA figures and metrics."""
+    cfg = load_config()
+    set_seed(int(cfg.seed))
+    path = Path(cfg.paths.interim_dir) / "cleaned.csv"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Cleaned dataset not found at {path}. Run python -m src.clean first."
+        )
+    run_eda(pd.read_csv(path), cfg)
 
 
 if __name__ == "__main__":

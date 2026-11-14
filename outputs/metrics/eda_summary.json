@@ -1,0 +1,313 @@
+{
+  "n_rows": 4800,
+  "counts_per_class": {
+    "0": {
+      "name": "Genuine Human",
+      "count": 2400
+    },
+    "1": {
+      "name": "Fake Human-Written",
+      "count": 800
+    },
+    "2": {
+      "name": "AI-Generated",
+      "count": 1600
+    }
+  },
+  "word_count_per_class": {
+    "0": {
+      "name": "Genuine Human",
+      "mean": 99.79541666666667,
+      "median": 72.0,
+      "max": 749
+    },
+    "1": {
+      "name": "Fake Human-Written",
+      "mean": 147.67375,
+      "median": 126.0,
+      "max": 795
+    },
+    "2": {
+      "name": "AI-Generated",
+      "mean": 62.019375,
+      "median": 35.0,
+      "max": 321
+    }
+  },
+  "label_x_domain": {
+    "0": {
+      "hotel": 800,
+      "product": 1600
+    },
+    "1": {
+      "hotel": 800,
+      "product": 0
+    },
+    "2": {
+      "hotel": 0,
+      "product": 1600
+    }
+  },
+  "label_x_source": {
+    "0": {
+      "ott": 800,
+      "salminen": 1600
+    },
+    "1": {
+      "ott": 800,
+      "salminen": 0
+    },
+    "2": {
+      "ott": 0,
+      "salminen": 1600
+    }
+  },
+  "top_words_per_class": {
+    "0": [
+      [
+        "hotel",
+        1480
+      ],
+      [
+        "room",
+        1419
+      ],
+      [
+        "great",
+        998
+      ],
+      [
+        "just",
+        688
+      ],
+      [
+        "did",
+        665
+      ],
+      [
+        "good",
+        645
+      ],
+      [
+        "like",
+        630
+      ],
+      [
+        "stay",
+        621
+      ],
+      [
+        "chicago",
+        486
+      ],
+      [
+        "book",
+        481
+      ],
+      [
+        "really",
+        451
+      ],
+      [
+        "staff",
+        437
+      ],
+      [
+        "time",
+        435
+      ],
+      [
+        "nice",
+        434
+      ],
+      [
+        "service",
+        395
+      ],
+      [
+        "love",
+        364
+      ],
+      [
+        "use",
+        358
+      ],
+      [
+        "stayed",
+        352
+      ],
+      [
+        "location",
+        348
+      ],
+      [
+        "night",
+        339
+      ]
+    ],
+    "1": [
+      [
+        "hotel",
+        1804
+      ],
+      [
+        "room",
+        1387
+      ],
+      [
+        "chicago",
+        1015
+      ],
+      [
+        "stay",
+        702
+      ],
+      [
+        "service",
+        428
+      ],
+      [
+        "staff",
+        396
+      ],
+      [
+        "did",
+        391
+      ],
+      [
+        "rooms",
+        346
+      ],
+      [
+        "like",
+        328
+      ],
+      [
+        "stayed",
+        316
+      ],
+      [
+        "great",
+        315
+      ],
+      [
+        "time",
+        306
+      ],
+      [
+        "just",
+        251
+      ],
+      [
+        "desk",
+        242
+      ],
+      [
+        "experience",
+        228
+      ],
+      [
+        "night",
+        220
+      ],
+      [
+        "place",
+        207
+      ],
+      [
+        "nice",
+        204
+      ],
+      [
+        "clean",
+        203
+      ],
+      [
+        "got",
+        191
+      ]
+    ],
+    "2": [
+      [
+        "good",
+        865
+      ],
+      [
+        "great",
+        813
+      ],
+      [
+        "book",
+        786
+      ],
+      [
+        "story",
+        632
+      ],
+      [
+        "love",
+        553
+      ],
+      [
+        "read",
+        463
+      ],
+      [
+        "recommend",
+        448
+      ],
+      [
+        "characters",
+        397
+      ],
+      [
+        "little",
+        379
+      ],
+      [
+        "movie",
+        337
+      ],
+      [
+        "like",
+        332
+      ],
+      [
+        "bought",
+        317
+      ],
+      [
+        "just",
+        296
+      ],
+      [
+        "loves",
+        281
+      ],
+      [
+        "small",
+        260
+      ],
+      [
+        "size",
+        239
+      ],
+      [
+        "easy",
+        236
+      ],
+      [
+        "nice",
+        235
+      ],
+      [
+        "bit",
+        233
+      ],
+      [
+        "use",
+        221
+      ]
+    ]
+  }
+}
