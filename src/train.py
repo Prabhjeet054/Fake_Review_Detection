@@ -1,7 +1,10 @@
-"""Train the classification head on cached DistilBERT embeddings."""
+# The test split must not be read by any training code.
+"""Train ClassifierHead on cached DistilBERT [CLS] embeddings (train/val only)."""
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -10,77 +13,81 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.config import load_config, parse_config_args, path_from_cfg
-from src.embed import load_embeddings
-from src.evaluate import compute_metrics
-from src.model import build_classifier, save_classifier
-from src.plots import plot_training_curves
-from src.utils import get_device, save_dataframe, seed_from_cfg, set_seed, setup_logging
+from src.config import AttrDict, load_config
+from src.embed import embedding_paths
+from src.model import ClassifierHead
+from src.utils import ensure_dirs, get_device, get_logger, set_seed
+
+ALLOWED_SPLITS = frozenset({"train", "val"})
+HISTORY_COLUMNS = ("epoch", "train_loss", "train_acc", "val_loss", "val_acc")
 
 
-def make_loader(embeddings: np.ndarray, labels: np.ndarray, cfg: dict[str, Any], *, shuffle: bool) -> DataLoader:
-    """Wrap embedding arrays in a Torch DataLoader."""
-    x = torch.from_numpy(np.asarray(embeddings, dtype=np.float32))
-    y = torch.from_numpy(np.asarray(labels, dtype=np.int64))
-    dataset = TensorDataset(x, y)
+def serialize_config(config: AttrDict) -> dict[str, Any]:
+    """Convert config to a plain JSON-like dict (paths become strings)."""
+
+    def convert(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): convert(item) for key, item in value.items()}
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, (list, tuple)):
+            return [convert(item) for item in value]
+        return value
+
+    return convert(dict(config))
+
+
+def load_cached_embeddings(config: AttrDict, split: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load X and y npy caches for train or val. Refuses the test split."""
+    if split not in ALLOWED_SPLITS:
+        raise RuntimeError("The test split must not be loaded by training code.")
+    paths = embedding_paths(config, split)
+    x_path, y_path = paths["X"], paths["y"]
+    if not x_path.is_file():
+        raise FileNotFoundError(f"Missing embedding file: {x_path}. Run python -m src.embed first.")
+    if not y_path.is_file():
+        raise FileNotFoundError(f"Missing embedding file: {y_path}. Run python -m src.embed first.")
+    X = np.load(x_path).astype(np.float32, copy=False)
+    y = np.load(y_path).astype(np.int64, copy=False)
+    return X, y
+
+
+def make_loader(
+    X: np.ndarray,
+    y: np.ndarray,
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+) -> DataLoader:
+    """Wrap embeddings in a TensorDataset DataLoader; shuffle uses a seeded generator."""
+    dataset = TensorDataset(
+        torch.from_numpy(np.asarray(X, dtype=np.float32)),
+        torch.from_numpy(np.asarray(y, dtype=np.int64)),
+    )
+    generator = None
+    if shuffle:
+        generator = torch.Generator()
+        generator.manual_seed(int(seed))
     return DataLoader(
         dataset,
-        batch_size=int(cfg["train"]["batch_size"]),
-        shuffle=shuffle,
-        num_workers=int(cfg["train"]["num_workers"]),
+        batch_size=int(batch_size),
+        shuffle=bool(shuffle),
+        generator=generator,
+        num_workers=0,
     )
 
 
-def make_optimizer(model: nn.Module, cfg: dict[str, Any]) -> torch.optim.Optimizer:
-    """Build the configured optimizer (Adam by default)."""
-    name = str(cfg["train"]["optimizer"]).lower()
-    lr = float(cfg["train"]["lr"])
-    weight_decay = float(cfg["train"]["weight_decay"])
-    if name == "adam":
-        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    if name == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    if name == "sgd":
-        return torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay)
-    raise ValueError(f"Unsupported optimizer '{name}'.")
-
-
-def make_loss(cfg: dict[str, Any]) -> nn.Module:
-    """Build the configured training loss."""
-    name = str(cfg["train"]["loss"]).lower()
-    if name in {"cross_entropy", "crossentropy", "ce"}:
-        return nn.CrossEntropyLoss()
-    raise ValueError(f"Unsupported loss '{name}'.")
-
-
-def accuracy_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> float:
-    """Batch accuracy from class logits."""
-    preds = logits.argmax(dim=1)
-    return float((preds == labels).float().mean().item())
-
-
-@torch.no_grad()
-def run_epoch_eval(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: str) -> tuple[float, float, np.ndarray, np.ndarray]:
-    """Evaluate loss/accuracy and collect predictions."""
-    model.eval()
-    total_loss = 0.0
-    n = 0
-    y_true: list[np.ndarray] = []
-    y_pred: list[np.ndarray] = []
-    for embeddings, labels in loader:
-        embeddings = embeddings.to(device)
-        labels = labels.to(device)
-        logits = model(embeddings)
-        loss = criterion(logits, labels)
-        batch = labels.size(0)
-        total_loss += float(loss.item()) * batch
-        n += batch
-        y_true.append(labels.detach().cpu().numpy())
-        y_pred.append(logits.argmax(dim=1).detach().cpu().numpy())
-    true_arr = np.concatenate(y_true) if y_true else np.array([], dtype=np.int64)
-    pred_arr = np.concatenate(y_pred) if y_pred else np.array([], dtype=np.int64)
-    acc = float((true_arr == pred_arr).mean()) if n else 0.0
-    return total_loss / max(n, 1), acc, true_arr, pred_arr
+def save_checkpoint(model: nn.Module, config: AttrDict, epoch: int, path: Path) -> Path:
+    """Save state_dict, the config used, and the epoch."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "state_dict": {key: value.detach().cpu().clone() for key, value in model.state_dict().items()},
+        "config": serialize_config(config),
+        "epoch": int(epoch),
+    }
+    torch.save(payload, path)
+    return path
 
 
 def train_one_epoch(
@@ -89,12 +96,9 @@ def train_one_epoch(
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: str,
-) -> tuple[float, float]:
-    """Run one training epoch and return mean loss and accuracy."""
+) -> None:
+    """Run one shuffled training epoch (dropout on). Metrics are not recorded here."""
     model.train()
-    total_loss = 0.0
-    total_acc = 0.0
-    n = 0
     for embeddings, labels in loader:
         embeddings = embeddings.to(device)
         labels = labels.to(device)
@@ -103,79 +107,132 @@ def train_one_epoch(
         loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()
-        batch = labels.size(0)
+
+
+@torch.no_grad()
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: str,
+) -> tuple[float, float]:
+    """Mean loss and accuracy in eval mode over every batch in loader."""
+    model.eval()
+    total_loss = 0.0
+    correct = 0
+    n = 0
+    for embeddings, labels in loader:
+        embeddings = embeddings.to(device)
+        labels = labels.to(device)
+        logits = model(embeddings)
+        loss = criterion(logits, labels)
+        batch = int(labels.size(0))
         total_loss += float(loss.item()) * batch
-        total_acc += accuracy_from_logits(logits.detach(), labels) * batch
+        correct += int((logits.argmax(dim=1) == labels).sum().item())
         n += batch
-    return total_loss / max(n, 1), total_acc / max(n, 1)
+    if n == 0:
+        return 0.0, 0.0
+    return total_loss / n, correct / n
 
 
-def train_classifier(
-    x_train: np.ndarray,
-    y_train: np.ndarray,
-    x_val: np.ndarray | None,
-    y_val: np.ndarray | None,
-    cfg: dict[str, Any],
-) -> tuple[nn.Module, pd.DataFrame]:
-    """Train the MLP head and return the model plus history."""
-    set_seed(seed_from_cfg(cfg))
-    device = get_device(cfg)
-    model = build_classifier(cfg).to(device)
-    optimizer = make_optimizer(model, cfg)
-    criterion = make_loss(cfg)
-    train_loader = make_loader(x_train, y_train, cfg, shuffle=True)
-    val_loader = None if x_val is None else make_loader(x_val, y_val, cfg, shuffle=False)
-    patience = cfg["train"]["patience"]
-    best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-    best_val = float("inf")
-    bad_epochs = 0
-    history_rows: list[dict[str, Any]] = []
-    epochs = int(cfg["train"]["epochs"])
+def train_head(config: AttrDict | None = None) -> pd.DataFrame:
+    """Train ClassifierHead on train/val embeddings and write history plus checkpoints."""
+    cfg = config if config is not None else load_config()
+    set_seed(int(cfg.seed))
+    ensure_dirs(cfg)
+    logger = get_logger(__name__)
+    device = get_device()
+
+    x_train, y_train = load_cached_embeddings(cfg, "train")
+    x_val, y_val = load_cached_embeddings(cfg, "val")
+    batch_size = int(cfg.training.batch_size)
+    seed = int(cfg.seed)
+    train_loader = make_loader(x_train, y_train, batch_size, shuffle=True, seed=seed)
+    train_eval_loader = make_loader(x_train, y_train, batch_size, shuffle=False, seed=seed)
+    val_loader = make_loader(x_val, y_val, batch_size, shuffle=False, seed=seed)
+
+    model = ClassifierHead(cfg).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.training.learning_rate))
+    criterion = nn.CrossEntropyLoss()
+
+    models_dir = Path(cfg.paths.models_dir)
+    best_path = models_dir / "head_best.pt"
+    last_path = models_dir / "head_last.pt"
+    history_path = Path(cfg.paths.metrics_dir) / "history.csv"
+
+    epochs = int(cfg.training.epochs)
+    best_val_loss = float("inf")
+    best_epoch = 0
+    best_state: dict[str, torch.Tensor] | None = None
+    rows: list[dict[str, Any]] = []
+
+    logger.info(
+        "Training ClassifierHead on device=%s n_train=%s n_val=%s epochs=%s batch=%s lr=%s",
+        device,
+        len(y_train),
+        len(y_val),
+        epochs,
+        batch_size,
+        cfg.training.learning_rate,
+    )
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        row: dict[str, Any] = {"epoch": epoch, "train_loss": train_loss, "train_acc": train_acc}
-        if val_loader is not None:
-            val_loss, val_acc, _, _ = run_epoch_eval(model, val_loader, criterion, device)
-            row["val_loss"] = val_loss
-            row["val_acc"] = val_acc
-            if val_loss < best_val:
-                best_val = val_loss
-                bad_epochs = 0
-                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-            else:
-                bad_epochs += 1
-        history_rows.append(row)
-        if patience is not None and val_loader is not None and bad_epochs >= int(patience):
-            break
-    if x_val is not None:
+        train_one_epoch(model, train_loader, criterion, optimizer, device)
+        train_loss, train_acc = evaluate(model, train_eval_loader, criterion, device)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        row = {
+            "epoch": epoch,
+            "train_loss": float(train_loss),
+            "train_acc": float(train_acc),
+            "val_loss": float(val_loss),
+            "val_acc": float(val_acc),
+        }
+        rows.append(row)
+        logger.info(
+            "epoch=%s train_loss=%.4f train_acc=%.4f val_loss=%.4f val_acc=%.4f",
+            epoch,
+            train_loss,
+            train_acc,
+            val_loss,
+            val_acc,
+        )
+        print(
+            f"epoch={epoch} train_loss={train_loss:.4f} train_acc={train_acc:.4f} "
+            f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+        )
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_epoch = epoch
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            save_checkpoint(model, cfg, epoch, best_path)
+
+    save_checkpoint(model, cfg, epochs, last_path)
+    if best_state is not None:
         model.load_state_dict(best_state)
-    model.to(device)
-    return model, pd.DataFrame(history_rows)
+        model.to(device)
+
+    history = pd.DataFrame(rows, columns=list(HISTORY_COLUMNS))
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history.to_csv(history_path, index=False)
+    logger.info(
+        "Best epoch=%s val_loss=%.4f -> %s ; last -> %s ; history -> %s",
+        best_epoch,
+        best_val_loss,
+        best_path,
+        last_path,
+        history_path,
+    )
+    print(f"best_epoch={best_epoch} best_val_loss={best_val_loss:.4f} wrote {best_path}")
+    print(f"wrote {last_path}")
+    print(f"wrote {history_path}")
+    return history
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Train on cached embeddings and write the classifier checkpoint."""
-    args = parse_config_args(argv)
-    cfg = load_config(args.config)
-    set_seed(seed_from_cfg(cfg))
-    logger = setup_logging(cfg)
-    x_train, y_train, _ = load_embeddings(cfg, "train")
-    try:
-        x_val, y_val, _ = load_embeddings(cfg, "val")
-    except FileNotFoundError:
-        x_val, y_val = None, None
-    model, history = train_classifier(x_train, y_train, x_val, y_val, cfg)
-    history_path = save_dataframe(history, path_from_cfg(cfg, "paths.logs") / cfg["train"]["log_filename"])
-    plot_training_curves(history, cfg, "training_curves")
-    extra: dict[str, Any] = {"history_path": str(history_path)}
-    if x_val is not None:
-        device = get_device(cfg)
-        loader = make_loader(x_val, y_val, cfg, shuffle=False)
-        _, _, y_true, y_pred = run_epoch_eval(model, loader, make_loss(cfg), device)
-        extra["val_metrics"] = compute_metrics(y_true, y_pred, cfg)
-    path = save_classifier(model, cfg, extra=extra)
-    logger.info("Saved classifier -> %s", path)
-    print(f"wrote {path} epochs={len(history)}")
+    """CLI: train the classification head on cached train/val embeddings."""
+    parser = argparse.ArgumentParser(description="Train ClassifierHead on frozen DistilBERT embeddings.")
+    parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
+    args = parser.parse_args(argv)
+    train_head(load_config(args.config))
 
 
 if __name__ == "__main__":
