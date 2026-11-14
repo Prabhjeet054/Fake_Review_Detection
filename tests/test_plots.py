@@ -15,13 +15,21 @@ from src.plots import (
     CLASSIFIER_ORDER,
     CURVE_FIGSIZE,
     METRIC_SPECS,
+    PER_CLASS_SPECS,
     SHORT_NAMES,
     best_epoch_from_history,
     build_baselines_figure,
+    build_confusion_heatmap,
     build_history_curve,
+    build_per_class_metrics_figure,
+    class_labels,
+    confusion_arrays,
     load_history,
+    load_metrics,
     plot_baselines,
+    plot_confusion_matrix,
     plot_history,
+    plot_per_class_metrics,
 )
 
 
@@ -134,3 +142,33 @@ def test_history_curve_line_data_matches_csv_and_xaxis_is_1_to_50() -> None:
                 atol=0.0,
             )
         plt.close(fig)
+
+
+def test_heatmap_annotations_match_confusion_matrix_and_rows_sum_to_100() -> None:
+    """Count-cell texts equal metrics.json; each normalised row sums to 100%."""
+    cfg = load_config()
+    metrics = load_metrics(cfg)
+    expected_cm = np.asarray(metrics["confusion_matrix"], dtype=int)
+    fig, ax = build_confusion_heatmap(normalized=False, config=cfg)
+    count_annot = np.array([int(text.get_text()) for text in ax.texts], dtype=int).reshape(expected_cm.shape)
+    np.testing.assert_array_equal(count_annot, expected_cm)
+    plt.close(fig)
+    _counts, percents, _names = confusion_arrays(cfg)
+    np.testing.assert_allclose(percents.sum(axis=1), np.full(expected_cm.shape[0], 100.0), atol=1e-9)
+
+
+def test_per_class_bar_heights_equal_metrics_json() -> None:
+    """Bar heights equal per-class precision, recall, and F1 in metrics.json (as percent)."""
+    cfg = load_config()
+    metrics = load_metrics(cfg)
+    names = class_labels(cfg)
+    fig, ax = build_per_class_metrics_figure(cfg)
+    bars = [patch for patch in ax.patches if isinstance(patch, Rectangle) and patch.get_width() > 0]
+    expected: list[float] = []
+    for column, _label in PER_CLASS_SPECS:
+        for name in names:
+            expected.append(100.0 * float(metrics["per_class"][name][column]))
+    assert len(bars) == len(expected) == 9
+    for bar, value in zip(bars, expected):
+        assert bar.get_height() == pytest.approx(value, abs=1e-9)
+    plt.close(fig)
