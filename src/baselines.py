@@ -1,132 +1,160 @@
-"""Train and evaluate TF-IDF + classical sklearn baselines."""
+"""Train TF-IDF baselines and evaluate them on val and test."""
 
 from __future__ import annotations
 
 import inspect
-import importlib
-from typing import Any
+import time
+from pathlib import Path
 
+import joblib
 import numpy as np
-from scipy import sparse
-from sklearn.base import BaseEstimator
+import pandas as pd
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import AdaBoostClassifier, GradientBoostingClassifier, RandomForestClassifier
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import LinearSVC
+from sklearn.tree import DecisionTreeClassifier
 
-from src.config import load_config, parse_config_args, path_from_cfg
-from src.evaluate import compute_metrics, save_metrics
-from src.features import fit_tfidf, texts_and_labels, transform_tfidf, vectorizer_path
-from src.plots import plot_confusion_matrix
-from src.utils import (
-    load_dataframe,
-    load_joblib,
-    save_joblib,
-    seed_from_cfg,
-    set_seed,
-    setup_logging,
+from src.config import AttrDict, load_config
+from src.features import make_tfidf_features
+from src.utils import ensure_dirs, get_logger, set_seed
+
+DENSE_MODELS = frozenset({"adaboost", "gradient_boosting"})
+MODEL_ORDER = (
+    "majority_class",
+    "knn",
+    "decision_tree",
+    "random_forest",
+    "svm",
+    "adaboost",
+    "gradient_boosting",
 )
+DISPLAY_NAMES = {
+    "majority_class": "Majority class",
+    "knn": "KNN",
+    "decision_tree": "Decision Tree",
+    "random_forest": "Random Forest",
+    "svm": "SVM",
+    "adaboost": "AdaBoost",
+    "gradient_boosting": "Gradient Boosting",
+}
 
 
-def instantiate_estimator(spec: str, params: dict[str, Any], seed: int) -> BaseEstimator:
-    """Import an sklearn estimator class and construct it with config params."""
-    module_name, class_name = spec.rsplit(".", 1)
-    cls = getattr(importlib.import_module(module_name), class_name)
-    kwargs = dict(params)
-    signature = inspect.signature(cls.__init__)
-    if "random_state" in signature.parameters:
-        kwargs.setdefault("random_state", seed)
+def _with_seed(cls: type, seed: int, **kwargs):
+    """Construct an estimator, passing random_state when the class supports it."""
+    if "random_state" in inspect.signature(cls.__init__).parameters:
+        kwargs["random_state"] = seed
     return cls(**kwargs)
 
 
-def baseline_names(cfg: dict[str, Any]) -> list[str]:
-    """Return configured baseline model names in YAML order."""
-    return list(cfg["baselines"].keys())
+def build_estimators(seed: int) -> dict:
+    """Return the configured baseline estimators, seeded where supported."""
+    return {
+        "majority_class": _with_seed(DummyClassifier, seed, strategy="most_frequent"),
+        "knn": KNeighborsClassifier(n_neighbors=5, metric="cosine", algorithm="brute"),
+        "decision_tree": _with_seed(DecisionTreeClassifier, seed),
+        "random_forest": _with_seed(RandomForestClassifier, seed, n_estimators=300, n_jobs=-1),
+        "svm": _with_seed(LinearSVC, seed),
+        "adaboost": _with_seed(AdaBoostClassifier, seed, n_estimators=200),
+        "gradient_boosting": _with_seed(GradientBoostingClassifier, seed, n_estimators=200),
+    }
 
 
-def maybe_dense(matrix: sparse.spmatrix | np.ndarray, estimator_name: str) -> sparse.spmatrix | np.ndarray:
-    """Convert to dense arrays for estimators that do not accept sparse input."""
-    dense_models = {"gradient_boosting", "adaboost"}
-    if estimator_name in dense_models and sparse.issparse(matrix):
+def _as_matrix(name: str, matrix):
+    """Return a dense array for models that do not accept sparse input."""
+    if name in DENSE_MODELS and hasattr(matrix, "toarray"):
         return matrix.toarray()
     return matrix
 
 
-def train_baseline(
-    name: str,
-    x_train: sparse.spmatrix | np.ndarray,
-    y_train: np.ndarray,
-    cfg: dict[str, Any],
-) -> BaseEstimator:
-    """Fit a single named baseline estimator."""
-    spec = cfg["baselines"][name]
-    model = instantiate_estimator(spec["estimator"], spec.get("params", {}), seed_from_cfg(cfg))
-    model.fit(maybe_dense(x_train, name), y_train)
-    return model
+def classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    """Compute accuracy and macro/weighted precision, recall, and F1."""
+    return {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "macro_precision": float(precision_score(y_true, y_pred, average="macro", zero_division=0)),
+        "macro_recall": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
+        "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+        "weighted_f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
+    }
 
 
-def evaluate_baseline(
-    model: BaseEstimator,
-    name: str,
-    x: sparse.spmatrix | np.ndarray,
-    y: np.ndarray,
-    cfg: dict[str, Any],
-) -> dict[str, Any]:
-    """Predict and compute metrics for one baseline."""
-    preds = np.asarray(model.predict(maybe_dense(x, name)))
-    metrics = compute_metrics(y, preds, cfg)
-    metrics["model"] = name
-    return metrics
+def _split_ids(config: AttrDict, name: str) -> np.ndarray:
+    """Load row ids for a split CSV."""
+    path = Path(config.paths.splits_dir) / f"{name}.csv"
+    return pd.read_csv(path, usecols=["id"])["id"].to_numpy()
 
 
-def model_path(cfg: dict[str, Any], name: str) -> Any:
-    """Path to a saved baseline model."""
-    return path_from_cfg(cfg, "paths.models") / f"baseline_{name}.joblib"
-
-
-def main(argv: list[str] | None = None) -> None:
-    """Train every baseline on train TF-IDF and evaluate on val/test."""
-    args = parse_config_args(argv)
-    cfg = load_config(args.config)
-    set_seed(seed_from_cfg(cfg))
-    logger = setup_logging(cfg)
-    split_dir = path_from_cfg(cfg, "paths.splits")
-    train_df = load_dataframe(split_dir / "train.csv")
-    val_df = load_dataframe(split_dir / "val.csv")
-    test_df = load_dataframe(split_dir / "test.csv")
-    train_texts, y_train = texts_and_labels(train_df, cfg)
-    val_texts, y_val = texts_and_labels(val_df, cfg)
-    test_texts, y_test = texts_and_labels(test_df, cfg)
-    stored = vectorizer_path(cfg)
-    if stored.exists():
-        vectorizer = load_joblib(stored)
-    else:
-        vectorizer = fit_tfidf(train_texts, cfg)
-        save_joblib(vectorizer, stored)
-    x_train = transform_tfidf(vectorizer, train_texts)
-    x_val = transform_tfidf(vectorizer, val_texts)
-    x_test = transform_tfidf(vectorizer, test_texts)
-    summary: list[dict[str, Any]] = []
-    for name in baseline_names(cfg):
-        logger.info("Training baseline %s", name)
-        model = train_baseline(name, x_train, y_train, cfg)
-        save_joblib(model, model_path(cfg, name))
-        val_metrics = evaluate_baseline(model, name, x_val, y_val, cfg)
-        test_metrics = evaluate_baseline(model, name, x_test, y_test, cfg)
-        save_metrics(val_metrics, cfg, f"baseline_{name}_val")
-        save_metrics(test_metrics, cfg, f"baseline_{name}_test")
-        plot_confusion_matrix(
-            np.array(test_metrics["confusion_matrix"]),
-            cfg,
-            stem=f"cm_baseline_{name}_test",
-            title=f"{name} test confusion matrix",
+def train_baselines(config: AttrDict | None = None) -> pd.DataFrame:
+    """Fit every baseline on train TF-IDF and evaluate on val and test."""
+    cfg = config if config is not None else load_config()
+    logger = get_logger(__name__)
+    set_seed(int(cfg.seed))
+    ensure_dirs(cfg)
+    X_train, X_val, X_test, y_train, y_val, y_test = make_tfidf_features(cfg)
+    splits = {
+        "val": (X_val, y_val, _split_ids(cfg, "val")),
+        "test": (X_test, y_test, _split_ids(cfg, "test")),
+    }
+    rows: list[dict] = []
+    preds_by_split: dict[str, dict[str, np.ndarray]] = {
+        "val": {"id": splits["val"][2], "y_true": y_val},
+        "test": {"id": splits["test"][2], "y_true": y_test},
+    }
+    estimators = build_estimators(int(cfg.seed))
+    models_dir = Path(cfg.paths.models_dir)
+    metrics_dir = Path(cfg.paths.metrics_dir)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    for name in MODEL_ORDER:
+        model = estimators[name]
+        x_fit = _as_matrix(name, X_train)
+        started = time.perf_counter()
+        model.fit(x_fit, y_train)
+        elapsed = time.perf_counter() - started
+        logger.info("Trained %s in %.2fs", DISPLAY_NAMES[name], elapsed)
+        joblib.dump(model, models_dir / f"baseline_{name}.joblib")
+        for split_name, (x_split, y_split, _ids) in splits.items():
+            y_pred = np.asarray(model.predict(_as_matrix(name, x_split)))
+            preds_by_split[split_name][name] = y_pred
+            metrics = classification_metrics(y_split, y_pred)
+            rows.append(
+                {
+                    "model": DISPLAY_NAMES[name],
+                    "model_key": name,
+                    "split": split_name,
+                    "train_seconds": elapsed,
+                    **metrics,
+                }
+            )
+    metrics_df = pd.DataFrame(rows)
+    metrics_df.to_csv(metrics_dir / "baselines.csv", index=False)
+    for split_name, payload in preds_by_split.items():
+        frame = pd.DataFrame(
+            {
+                "id": payload["id"],
+                "y_true": payload["y_true"],
+                **{key: payload[key] for key in MODEL_ORDER},
+            }
         )
-        row = {"model": name, "val_accuracy": val_metrics["accuracy"], "test_accuracy": test_metrics["accuracy"]}
-        row["macro_f1"] = test_metrics["macro_f1"]
-        row["weighted_f1"] = test_metrics["weighted_f1"]
-        row["cohen_kappa"] = test_metrics["cohen_kappa"]
-        summary.append(row)
-        logger.info("%s test acc=%.4f macro_f1=%.4f", name, test_metrics["accuracy"], test_metrics["macro_f1"])
-    from src.utils import save_json
+        frame.to_csv(metrics_dir / f"baseline_predictions_{split_name}.csv", index=False)
+    test_table = (
+        metrics_df.loc[metrics_df["split"] == "test"]
+        .sort_values("macro_f1", ascending=False)
+        .reset_index(drop=True)
+    )
+    print("\nBaselines sorted by test macro F1:")
+    print(
+        test_table[
+            ["model", "accuracy", "macro_precision", "macro_recall", "macro_f1", "weighted_f1", "train_seconds"]
+        ].to_string(index=False)
+    )
+    return metrics_df
 
-    save_json(summary, path_from_cfg(cfg, "paths.metrics") / "baselines_summary.json")
-    print(f"trained {len(summary)} baselines")
+
+def main() -> None:
+    """Train baselines from config.yaml and write metrics and models."""
+    train_baselines(load_config())
 
 
 if __name__ == "__main__":
