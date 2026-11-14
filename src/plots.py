@@ -1,9 +1,8 @@
-"""Plotting helpers for EDA, metrics, and training curves."""
+"""Grouped bar charts for classical baseline metrics."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import matplotlib
 
@@ -11,140 +10,97 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 
-from src.config import label_names, load_config, parse_config_args, path_from_cfg
-from src.utils import ensure_dir, seed_from_cfg, set_seed
+from src.config import AttrDict, load_config
+from src.utils import ensure_dirs
 
-
-def _style(cfg: dict[str, Any]) -> None:
-    """Apply seaborn style from config."""
-    sns.set_theme(style=cfg["plots"]["style"], palette=cfg["plots"]["palette"])
-
-
-def figure_path(cfg: dict[str, Any], stem: str) -> Path:
-    """Return the output path for a named figure."""
-    directory = ensure_dir(path_from_cfg(cfg, "paths.figures"))
-    return directory / f"{stem}.{cfg['plots']['format']}"
-
-
-def save_current_fig(cfg: dict[str, Any], stem: str) -> Path:
-    """Save the active matplotlib figure using plot settings from config."""
-    path = figure_path(cfg, stem)
-    plt.tight_layout()
-    plt.savefig(path, dpi=int(cfg["plots"]["dpi"]))
-    plt.close()
-    return path
+CLASSIFIER_ORDER = ("KNN", "RF", "DT", "SVM", "AB", "GB")
+SHORT_NAMES = {
+    "KNN": "KNN",
+    "Random Forest": "RF",
+    "Decision Tree": "DT",
+    "SVM": "SVM",
+    "AdaBoost": "AB",
+    "Gradient Boosting": "GB",
+}
+METRIC_SPECS = (
+    ("accuracy", "Accuracy"),
+    ("macro_precision", "Precision"),
+    ("macro_recall", "Recall"),
+    ("macro_f1", "F1"),
+)
+BAR_COLORS = ("#4C78A8", "#F58518", "#54A24B", "#E45756")
 
 
-def plot_class_distribution(df: pd.DataFrame, cfg: dict[str, Any], stem: str = "class_distribution") -> Path:
-    """Bar chart of class counts."""
-    _style(cfg)
-    names = label_names(cfg)
-    label_col = cfg["columns"]["label"]
-    counts = df[label_col].value_counts().sort_index()
-    labels = [names.get(int(idx), str(idx)) for idx in counts.index]
-    figsize = tuple(cfg["plots"]["figsize"])
-    plt.figure(figsize=figsize)
-    sns.barplot(x=labels, y=counts.values)
-    plt.title("Class distribution", fontsize=cfg["plots"]["title_fontsize"])
-    plt.ylabel("Count")
-    plt.xticks(rotation=20)
-    return save_current_fig(cfg, stem)
+def _split_rows(split: str, config: AttrDict | None = None) -> pd.DataFrame:
+    """Load baselines.csv for one split, excluding the majority-class row."""
+    cfg = config if config is not None else load_config()
+    csv_path = Path(cfg.paths.metrics_dir) / "baselines.csv"
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"Missing {csv_path}. Run python -m src.baselines first.")
+    df = pd.read_csv(csv_path)
+    df = df.loc[df["model"].str.lower() != "majority class"].copy()
+    df = df.loc[df["split"].astype(str).str.lower() == split.lower()].copy()
+    df["short"] = df["model"].map(SHORT_NAMES)
+    df = df.loc[df["short"].isin(CLASSIFIER_ORDER)].copy()
+    df["short"] = pd.Categorical(df["short"], categories=CLASSIFIER_ORDER, ordered=True)
+    df = df.sort_values("short")
+    if df.empty:
+        raise ValueError(f"No baseline rows found for split '{split}'.")
+    return df
 
 
-def plot_length_distribution(
-    df: pd.DataFrame,
-    cfg: dict[str, Any],
-    text_col: str,
-    stem: str = "length_distribution",
-) -> Path:
-    """Histogram of token lengths by class."""
-    _style(cfg)
-    names = label_names(cfg)
-    work = df.copy()
-    work["n_tokens"] = work[text_col].fillna("").astype(str).str.split().map(len)
-    work["class_name"] = work[cfg["columns"]["label"]].map(lambda value: names.get(int(value), str(value)))
-    plt.figure(figsize=tuple(cfg["plots"]["figsize"]))
-    sns.histplot(data=work, x="n_tokens", hue="class_name", element="step", stat="density", common_norm=False)
-    plt.title("Review length by class", fontsize=cfg["plots"]["title_fontsize"])
-    plt.xlabel("Tokens")
-    return save_current_fig(cfg, stem)
-
-
-def plot_confusion_matrix(
-    matrix: np.ndarray,
-    cfg: dict[str, Any],
-    stem: str = "confusion_matrix",
-    title: str = "Confusion matrix",
-) -> Path:
-    """Heatmap of a square confusion matrix."""
-    _style(cfg)
-    names = [label_names(cfg)[i] for i in range(int(cfg["model"]["num_classes"]))]
-    plt.figure(figsize=tuple(cfg["plots"]["figsize"]))
-    sns.heatmap(matrix, annot=True, fmt="d", cmap="Blues", xticklabels=names, yticklabels=names)
-    plt.ylabel("True")
-    plt.xlabel("Predicted")
-    plt.title(title, fontsize=cfg["plots"]["title_fontsize"])
-    plt.xticks(rotation=20)
-    plt.yticks(rotation=0)
-    return save_current_fig(cfg, stem)
-
-
-def plot_metrics_comparison(rows: list[dict[str, Any]], cfg: dict[str, Any], stem: str = "metrics_comparison") -> Path:
-    """Grouped bar chart comparing models on a selected metric."""
-    _style(cfg)
-    frame = pd.DataFrame(rows)
-    metric = cfg["experiments"]["metric"]
-    if metric not in frame.columns:
-        raise ValueError(f"Metric '{metric}' is not in comparison rows.")
-    plt.figure(figsize=tuple(cfg["plots"]["figsize"]))
-    sns.barplot(data=frame, x="model", y=metric)
-    plt.title(f"Model comparison ({metric})", fontsize=cfg["plots"]["title_fontsize"])
-    plt.xticks(rotation=25)
-    plt.ylabel(metric)
-    return save_current_fig(cfg, stem)
-
-
-def plot_training_curves(history: pd.DataFrame, cfg: dict[str, Any], stem: str = "training_curves") -> Path:
-    """Plot train/val loss and accuracy over epochs."""
-    _style(cfg)
-    fig, axes = plt.subplots(1, 2, figsize=(cfg["plots"]["figsize"][0] * 1.6, cfg["plots"]["figsize"][1]))
-    axes[0].plot(history["epoch"], history["train_loss"], label="train")
-    if "val_loss" in history.columns:
-        axes[0].plot(history["epoch"], history["val_loss"], label="val")
-    axes[0].set_title("Loss")
-    axes[0].set_xlabel("Epoch")
-    axes[0].legend()
-    axes[1].plot(history["epoch"], history["train_acc"], label="train")
-    if "val_acc" in history.columns:
-        axes[1].plot(history["epoch"], history["val_acc"], label="val")
-    axes[1].set_title("Accuracy")
-    axes[1].set_xlabel("Epoch")
-    axes[1].legend()
-    fig.suptitle("Training curves", fontsize=cfg["plots"]["title_fontsize"])
-    path = figure_path(cfg, stem)
+def build_baselines_figure(split: str, config: AttrDict | None = None):
+    """Rebuild the grouped bar chart and return (figure, axes) without saving."""
+    df = _split_rows(split, config)
+    x = np.arange(len(CLASSIFIER_ORDER))
+    width = 0.18
+    offsets = np.linspace(-1.5, 1.5, num=len(METRIC_SPECS)) * width
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for offset, color, (column, label) in zip(offsets, BAR_COLORS, METRIC_SPECS):
+        values = []
+        for name in CLASSIFIER_ORDER:
+            row = df.loc[df["short"] == name]
+            values.append(100.0 * float(row[column].iloc[0]) if len(row) else 0.0)
+        bars = ax.bar(x + offset, values, width=width, label=label, color=color)
+        for bar, value in zip(bars, values):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f"{value:.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                clip_on=False,
+            )
+    ax.set_xticks(x)
+    ax.set_xticklabels(list(CLASSIFIER_ORDER))
+    ax.set_xlabel("Classifiers")
+    ax.set_ylabel("Evaluation metrics (%)")
+    ax.set_ylim(0, 100)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.14), ncol=4, frameon=True)
+    ax.set_title(f"Baseline metrics ({split})")
     fig.tight_layout()
-    fig.savefig(path, dpi=int(cfg["plots"]["dpi"]))
+    return fig, ax
+
+
+def plot_baselines(split: str, config: AttrDict | None = None) -> Path:
+    """Draw a grouped bar chart of baseline metrics for one split and save it at 200 dpi."""
+    cfg = config if config is not None else load_config()
+    ensure_dirs(cfg)
+    fig, _ax = build_baselines_figure(split, cfg)
+    out_path = Path(cfg.paths.figures_dir) / f"baselines_{split}.png"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
-    return path
+    print(f"wrote {out_path}")
+    return out_path
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Write a placeholder class-distribution figure from split data if available."""
-    args = parse_config_args(argv)
-    cfg = load_config(args.config)
-    set_seed(seed_from_cfg(cfg))
-    split_dir = path_from_cfg(cfg, "paths.splits")
-    train_path = split_dir / "train.csv"
-    if not train_path.exists():
-        print("No train split found; plots module imported successfully.")
-        return
-    from src.utils import load_dataframe
-
-    df = load_dataframe(train_path)
-    path = plot_class_distribution(df, cfg, "plots_module_class_distribution")
-    print(f"wrote {path}")
+def main() -> None:
+    """Write val and test baseline comparison figures."""
+    plot_baselines("val")
+    plot_baselines("test")
 
 
 if __name__ == "__main__":
