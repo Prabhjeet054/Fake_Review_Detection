@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.config import load_config
-from src.utils import get_logger
+from src.config import AttrDict, load_config
+from src.schema import validate_dataframe
+from src.utils import ensure_dirs, get_logger, set_seed
 
 SALMINEN_LABEL_MAP = {"OR": 0, "CG": 2}
 OTT_LABEL_MAP = {"TRUTHFUL": 0, "DECEPTIVE": 1}
@@ -125,24 +126,49 @@ def load_ott(path: str | Path) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-def main() -> None:
-    """Load both sources and print per-source label counts plus sample reviews."""
-    from src.schema import ID2LABEL
-    from src.utils import set_seed
+def _sample_rows(df: pd.DataFrame, n: int, seed: int, name: str) -> pd.DataFrame:
+    """Return n rows sampled without replacement using the given seed."""
+    available = len(df)
+    if n > available:
+        raise ValueError(f"Requested {n} {name} rows but only {available} are available.")
+    return df.sample(n=n, random_state=seed)
 
-    cfg = load_config()
-    set_seed(int(cfg.seed))
-    frames = [load_salminen(cfg.data.salminen_file), load_ott(cfg.data.ott_file)]
-    df = pd.concat(frames, ignore_index=True)
-    print("\nrows_per_source_and_label:")
-    print(df.groupby(["source", "label"]).size().to_string())
-    print(f"n_rows={len(df)}")
-    for (source, label_id), group in df.groupby(["source", "label"]):
-        name = ID2LABEL.get(int(label_id), str(label_id))
-        print(f"\n--- {source} label {label_id} ({name}), n={len(group)} ---")
-        sample = group.sample(n=min(2, len(group)), random_state=int(cfg.seed))
-        for _, row in sample.iterrows():
-            print(f"[{row['category']}] {str(row['text'])[:400]}")
+
+def build_dataset(config: AttrDict) -> pd.DataFrame:
+    """Merge all Ott rows with a seeded Salminen sample, validate, and save merged.csv."""
+    seed = int(config.seed)
+    set_seed(seed)
+    ott = load_ott(config.data.ott_file)[OUTPUT_COLUMNS]
+    salminen = load_salminen(config.data.salminen_file)[OUTPUT_COLUMNS]
+    genuine = _sample_rows(
+        salminen.loc[salminen["label"] == 0],
+        int(config.data.genuine_product_sample),
+        seed,
+        "Salminen genuine (OR)",
+    )
+    ai = _sample_rows(
+        salminen.loc[salminen["label"] == 2],
+        int(config.data.ai_sample),
+        seed,
+        "Salminen AI (CG)",
+    )
+    merged = pd.concat([ott, genuine, ai], ignore_index=True)
+    merged = merged.sample(frac=1, random_state=seed).reset_index(drop=True)
+    merged.insert(0, "id", range(len(merged)))
+    merged["id"] = merged["id"].astype(int)
+    validate_dataframe(merged)
+    ensure_dirs(config)
+    out_path = Path(config.paths.interim_dir) / "merged.csv"
+    merged.to_csv(out_path, index=False)
+    print("crosstab label x domain:")
+    print(pd.crosstab(merged["label"], merged["domain"]))
+    print(f"saved={out_path} n_rows={len(merged)}")
+    return merged
+
+
+def main() -> None:
+    """Build the merged dataset from config.yaml."""
+    build_dataset(load_config())
 
 
 if __name__ == "__main__":
