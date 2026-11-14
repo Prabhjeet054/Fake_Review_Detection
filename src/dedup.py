@@ -1,31 +1,33 @@
-"""Near-duplicate grouping so similar reviews stay in the same split."""
+"""Drop exact duplicate reviews and group near-duplicates for a leak-free split."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any
+import re
+from pathlib import Path
 
 import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import NearestNeighbors
 
-from src.config import load_config, parse_config_args, path_from_cfg
-from src.utils import load_dataframe, save_dataframe, seed_from_cfg, set_seed, setup_logging
+from src.config import AttrDict, load_config
+from src.utils import ensure_dirs, get_logger, set_seed
 
 
 class UnionFind:
-    """Disjoint-set structure for grouping near-duplicate reviews."""
+    """Disjoint-set structure that merges near-duplicate row indices."""
 
-    def __init__(self, items: Iterable[str]) -> None:
-        self.parent = {item: item for item in items}
-        self.rank = {item: 0 for item in self.parent}
+    def __init__(self, n: int) -> None:
+        self.parent = list(range(n))
+        self.rank = [0] * n
 
-    def find(self, item: str) -> str:
+    def find(self, item: int) -> int:
         """Return the representative for an item, with path compression."""
         parent = self.parent[item]
         if parent != item:
             self.parent[item] = self.find(parent)
         return self.parent[item]
 
-    def union(self, left: str, right: str) -> None:
+    def union(self, left: int, right: int) -> None:
         """Merge the sets containing left and right."""
         root_left, root_right = self.find(left), self.find(right)
         if root_left == root_right:
@@ -39,126 +41,104 @@ class UnionFind:
             self.rank[root_left] += 1
 
 
-def shingles(text: str, ngram: int, level: str) -> set[str]:
-    """Return character or word n-grams for similarity comparison."""
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return set()
-    if level == "word":
-        tokens = cleaned.split()
-        if len(tokens) < ngram:
-            return {" ".join(tokens)} if tokens else set()
-        return {" ".join(tokens[i : i + ngram]) for i in range(len(tokens) - ngram + 1)}
-    if len(cleaned) < ngram:
-        return {cleaned}
-    return {cleaned[i : i + ngram] for i in range(len(cleaned) - ngram + 1)}
-
-
-def jaccard(left: set[str], right: set[str]) -> float:
-    """Compute Jaccard similarity of two shingle sets."""
-    if not left and not right:
-        return 1.0
-    if not left or not right:
-        return 0.0
-    return len(left & right) / len(left | right)
-
-
-def _group_exact(df: pd.DataFrame, text_col: str, id_col: str) -> UnionFind:
-    """Union reviews that share an exact cleaned-text hash."""
-    uf = UnionFind(df[id_col].astype(str).tolist())
-    buckets: dict[str, str] = {}
-    for review_id, text in zip(df[id_col].astype(str), df[text_col].fillna("").astype(str)):
-        key = " ".join(text.split())
-        if key in buckets:
-            uf.union(buckets[key], review_id)
-        else:
-            buckets[key] = review_id
-    return uf
-
-
-def _group_bruteforce(
-    df: pd.DataFrame,
-    uf: UnionFind,
-    cfg: dict[str, Any],
-) -> UnionFind:
-    """Pairwise Jaccard grouping for small collections."""
-    settings = cfg["dedup"]
-    text_col = cfg["columns"]["clean_text"]
-    id_col = cfg["columns"]["id"]
-    ids = df[id_col].astype(str).tolist()
-    gram_sets = [
-        shingles(text, int(settings["ngram"]), str(settings["ngram_level"]))
-        for text in df[text_col].fillna("").astype(str)
-    ]
-    threshold = float(settings["threshold"])
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            if jaccard(gram_sets[i], gram_sets[j]) >= threshold:
-                uf.union(ids[i], ids[j])
-    return uf
-
-
-def _group_minhash(
-    df: pd.DataFrame,
-    uf: UnionFind,
-    cfg: dict[str, Any],
-) -> UnionFind:
-    """Approximate near-duplicate grouping with MinHash LSH."""
-    from datasketch import MinHash, MinHashLSH
-
-    settings = cfg["dedup"]
-    text_col = cfg["columns"]["clean_text"]
-    id_col = cfg["columns"]["id"]
-    num_perm = int(settings["num_perm"])
-    threshold = float(settings["threshold"])
-    lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
-    signatures: dict[str, MinHash] = {}
-    for review_id, text in zip(df[id_col].astype(str), df[text_col].fillna("").astype(str)):
-        grams = shingles(text, int(settings["ngram"]), str(settings["ngram_level"]))
-        mh = MinHash(num_perm=num_perm)
-        if not grams:
-            mh.update(b"")
-        for gram in grams:
-            mh.update(gram.encode("utf-8"))
-        signatures[review_id] = mh
-        neighbours = lsh.query(mh)
-        for neighbour in neighbours:
-            uf.union(review_id, neighbour)
-        lsh.insert(review_id, mh)
-    return uf
-
-
-def assign_group_ids(df: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
-    """Add a group_id column for exact and near-duplicate reviews."""
-    if cfg["columns"]["clean_text"] not in df.columns:
-        raise ValueError("Cleaned text column is required before near-duplicate grouping.")
-    id_col = cfg["columns"]["id"]
-    group_col = cfg["columns"]["group"]
-    uf = _group_exact(df, cfg["columns"]["clean_text"], id_col)
-    limit = int(cfg["dedup"]["brute_force_limit"])
-    method = str(cfg["dedup"]["method"]).lower()
-    if len(df) <= limit or method == "jaccard":
-        uf = _group_bruteforce(df, uf, cfg)
+def drop_exact_duplicates(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep the first row for each text_clean value and log drops per label."""
+    logger = get_logger(__name__)
+    duplicate = df.duplicated(subset=["text_clean"], keep="first")
+    n_dropped = int(duplicate.sum())
+    if n_dropped and "label" in df.columns:
+        counts = df.loc[duplicate, "label"].value_counts().sort_index()
+        for label, count in counts.items():
+            logger.info("Dropped %s exact duplicate rows (label=%s)", int(count), int(label))
     else:
-        uf = _group_minhash(df, uf, cfg)
+        logger.info("Dropped %s exact duplicate rows", n_dropped)
+    return df.loc[~duplicate].reset_index(drop=True)
+
+
+def _similarity_text(text: str) -> str:
+    """Map punctuation to spaces so short punctuation-only edits still count as near-dups."""
+    mapped = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in str(text))
+    return re.sub(r"\s+", " ", mapped).strip()
+
+
+def link_near_duplicates(texts: list[str], threshold: float) -> UnionFind:
+    """Union rows whose char 3-5 gram TF-IDF cosine similarity is at least threshold."""
+    uf = UnionFind(len(texts))
+    if len(texts) <= 1:
+        return uf
+    comparable = [_similarity_text(text) for text in texts]
+    matrix = TfidfVectorizer(analyzer="char", ngram_range=(3, 5), min_df=1).fit_transform(comparable)
+    radius = max(0.0, 1.0 - float(threshold))
+    neighbors = NearestNeighbors(metric="cosine", algorithm="brute")
+    neighbors.fit(matrix)
+    distances, indices = neighbors.radius_neighbors(matrix, radius=radius, return_distance=True)
+    for i, (dist_row, index_row) in enumerate(zip(distances, indices)):
+        for dist, j in zip(dist_row, index_row):
+            if int(j) > i and float(dist) <= radius:
+                uf.union(i, int(j))
+    return uf
+
+
+def assign_group_ids(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    """Add a group_id for every row; singletons receive their own id."""
+    texts = df["text_clean"].fillna("").astype(str).tolist()
+    uf = link_near_duplicates(texts, threshold)
+    root_to_group: dict[int, int] = {}
+    group_ids: list[int] = []
+    next_id = 0
+    for index in range(len(df)):
+        root = uf.find(index)
+        if root not in root_to_group:
+            root_to_group[root] = next_id
+            next_id += 1
+        group_ids.append(root_to_group[root])
     out = df.copy()
-    out[group_col] = out[id_col].astype(str).map(lambda review_id: f"g_{uf.find(review_id)}")
+    out["group_id"] = group_ids
     return out
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Group near-duplicates in the cleaned interim file."""
-    args = parse_config_args(argv)
-    cfg = load_config(args.config)
-    set_seed(seed_from_cfg(cfg))
-    logger = setup_logging(cfg)
-    df = load_dataframe(path_from_cfg(cfg, "data.interim_clean"))
-    grouped = assign_group_ids(df, cfg)
-    out_path = path_from_cfg(cfg, "data.interim_grouped")
-    save_dataframe(grouped, out_path)
-    n_groups = grouped[cfg["columns"]["group"]].nunique()
-    logger.info("Grouped %s reviews into %s groups -> %s", len(grouped), n_groups, out_path)
-    print(f"wrote {out_path} rows={len(grouped)} groups={n_groups}")
+def _print_example_groups(df: pd.DataFrame, sizes: pd.Series, n_examples: int = 3) -> None:
+    """Print up to n_examples multi-member groups with truncated cleaned text."""
+    multi = sizes[sizes > 1].sort_values(ascending=False)
+    if multi.empty:
+        print("No near-duplicate groups with more than one member.")
+        return
+    for group_id in multi.head(n_examples).index:
+        group = df.loc[df["group_id"] == group_id]
+        print(f"\n--- group_id={int(group_id)} n={len(group)} ---")
+        for _, row in group.iterrows():
+            preview = str(row["text_clean"]).replace("\n", " ")[:180]
+            print(f"[{row.get('id', '')} label={row.get('label', '')}] {preview}")
+
+
+def run_dedup(df: pd.DataFrame, config: AttrDict | None = None) -> pd.DataFrame:
+    """Drop exact duplicates, group near-duplicates, and save dataset.csv."""
+    cfg = config if config is not None else load_config()
+    logger = get_logger(__name__)
+    set_seed(int(cfg.seed))
+    out = drop_exact_duplicates(df)
+    out = assign_group_ids(out, float(cfg.dedup.near_dup_threshold))
+    sizes = out.groupby("group_id").size()
+    n_multi = int((sizes > 1).sum())
+    logger.info("%s groups have more than one member", n_multi)
+    print(f"multi_member_groups={n_multi}")
+    _print_example_groups(out, sizes)
+    ensure_dirs(cfg)
+    out_path = Path(cfg.paths.processed_dir) / "dataset.csv"
+    out.to_csv(out_path, index=False)
+    print(f"saved={out_path} n_rows={len(out)} n_groups={out['group_id'].nunique()}")
+    return out
+
+
+def main() -> None:
+    """Deduplicate data/interim/cleaned.csv and write data/processed/dataset.csv."""
+    cfg = load_config()
+    path = Path(cfg.paths.interim_dir) / "cleaned.csv"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Cleaned dataset not found at {path}. Run python -m src.clean first."
+        )
+    run_dedup(pd.read_csv(path), cfg)
 
 
 if __name__ == "__main__":
