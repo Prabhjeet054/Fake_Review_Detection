@@ -1,0 +1,5 @@
+deceptive,hotel,polarity,source,text
+truthful,hilton,positive,TripAdvisor,"We stayed at the Hilton for two nights. The room was clean and the staff were helpful."
+deceptive,hilton,positive,MTurk,"My husband and I recently stayed at this hotel and it was the most wonderful experience."
+truthful,affinia,negative,Web,"The walls were thin and we heard traffic all night. Checkout took forever."
+deceptive,affinia,negative,MTurk,"I had a horrible time at this hotel. The staff ignored us and the room smelled terrible."
