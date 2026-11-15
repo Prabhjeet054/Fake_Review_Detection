@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.config import AttrDict, load_config
+from src.explain import attention_view, occlusion_view, render_html
 from src.predict import ReviewClassifier
 
 CLASS_NAMES = ("Genuine Human", "Fake Human-Written", "AI-Generated")
@@ -84,6 +85,22 @@ def _show_prediction(result: dict[str, Any]) -> None:
         st.write(result["cleaned_text"])
 
 
+def _show_explanation(text: str, classifier: ReviewClassifier) -> None:
+    """Render attention and occlusion explanations for a prediction."""
+    with st.expander("Explain this prediction"):
+        st.caption(
+            "Attention comes from the frozen encoder and is not a causal explanation. "
+            "Occlusion directly measures the classifier's probability change."
+        )
+        with st.spinner("Computing explanation..."):
+            attention = attention_view(text, classifier)
+            occlusion = occlusion_view(text, classifier)
+        st.markdown("**Attention view**")
+        st.markdown(render_html(attention), unsafe_allow_html=True)
+        st.markdown("**Occlusion view**")
+        st.markdown(render_html(occlusion), unsafe_allow_html=True)
+
+
 def _render_sidebar(cfg: AttrDict) -> None:
     """Render model details and saved test metrics."""
     metrics = _metrics(cfg)
@@ -124,11 +141,13 @@ def _render_single_tab(cfg: AttrDict, examples: pd.DataFrame, config_path: str) 
         st.warning("Enter a review before analyzing.")
         return
     try:
-        result = load_classifier(config_path).predict([review])[0]
+        classifier = load_classifier(config_path)
+        result = classifier.predict([review])[0]
     except ValueError as exc:
         st.warning(str(exc))
         return
     _show_prediction(result)
+    _show_explanation(review, classifier)
 
 
 def _render_batch_tab(config_path: str) -> None:
