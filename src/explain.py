@@ -62,8 +62,14 @@ def _last_layer_attention(
     encoded: dict[str, torch.Tensor],
 ) -> torch.Tensor:
     """Return the last-layer attention matrix averaged over heads."""
+    encoder = classifier.encoder
+    # SDPA cannot return attention weights; eager attention is required.
+    if hasattr(encoder, "set_attn_implementation"):
+        encoder.set_attn_implementation("eager")
+    elif hasattr(encoder, "config"):
+        encoder.config._attn_implementation = "eager"
     with torch.no_grad():
-        output = classifier.encoder(
+        output = encoder(
             input_ids=encoded["input_ids"],
             attention_mask=encoded["attention_mask"],
             output_attentions=True,

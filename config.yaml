@@ -43,3 +43,8 @@ training:
   batch_size: 32
   epochs: 50
   embed_batch_size: 64
+experiments:
+  early_stopping_patience: 5
+  finetune_learning_rate: 0.00002
+  finetune_batch_size: 16
+  finetune_epochs: 3
