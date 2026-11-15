@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -150,8 +151,173 @@ def metrics_by_source(df: pd.DataFrame, cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _config_path(cfg: Any, section: str, key: str) -> Path:
+    """Return a path from either mapping-style or attribute-style config."""
+    values = cfg[section] if isinstance(cfg, dict) else getattr(cfg, section)
+    value = values[key] if isinstance(values, dict) else getattr(values, key)
+    return Path(value)
+
+
+def _label_map(cfg: Any) -> dict[int, str]:
+    """Return configured class names, falling back to the project labels."""
+    labels = cfg.get("labels") if isinstance(cfg, dict) else getattr(cfg, "labels", None)
+    if labels is None:
+        return dict(enumerate(CLASS_NAMES))
+    return {int(key): str(value) for key, value in labels.items()}
+
+
+def _markdown_table(frame: pd.DataFrame) -> str:
+    """Render a small DataFrame as a readable markdown table."""
+    if frame.empty:
+        return "_No rows._"
+    columns = [str(column) for column in frame.columns]
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join("---" for _ in columns) + " |",
+    ]
+    for row in frame.itertuples(index=False, name=None):
+        values = []
+        for value in row:
+            text = str(value).replace("|", "\\|").replace("\n", " ")
+            values.append(text)
+        lines.append("| " + " | ".join(values) + " |")
+    return "\n".join(lines)
+
+
+def _length_bucket(word_count: int) -> str:
+    """Return the configured review-length bucket for a word count."""
+    if word_count < 50:
+        return "<50"
+    if word_count <= 100:
+        return "50-100"
+    if word_count <= 200:
+        return "100-200"
+    return ">200"
+
+
+def _group_error_rates(frame: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Calculate total rows, errors, and error rate for a grouping column."""
+    grouped = (
+        frame.groupby(column, dropna=False, observed=False)
+        .agg(total=("is_error", "size"), errors=("is_error", "sum"))
+        .reset_index()
+    )
+    grouped["error_rate"] = grouped["errors"] / grouped["total"]
+    grouped["error_rate"] = grouped["error_rate"].map(lambda value: f"{value:.4f}")
+    return grouped
+
+
+def error_analysis(cfg: Any | None = None) -> dict[str, Any]:
+    """Write misclassified rows and a markdown report from test predictions."""
+    if cfg is None:
+        from src.config import load_config
+
+        cfg = load_config()
+    metrics_dir = _config_path(cfg, "paths", "metrics_dir")
+    predictions_path = metrics_dir / "test_predictions.csv"
+    if not predictions_path.is_file():
+        raise FileNotFoundError(f"Missing prediction file: {predictions_path}")
+    predictions = pd.read_csv(predictions_path)
+    required = {"id", "text_clean", "true", "pred", "p0", "p1", "p2"}
+    missing = sorted(required - set(predictions.columns))
+    if missing:
+        raise ValueError(f"test_predictions.csv is missing column(s): {', '.join(missing)}")
+
+    labels = _label_map(cfg)
+    predictions["true"] = predictions["true"].astype(int)
+    predictions["pred"] = predictions["pred"].astype(int)
+    predictions["is_error"] = predictions["true"] != predictions["pred"]
+    probabilities = predictions[["p0", "p1", "p2"]].to_numpy(dtype=float)
+    predicted_labels = predictions["pred"].to_numpy(dtype=int)
+    predictions["predicted_probability"] = np.take_along_axis(
+        probabilities, predicted_labels[:, None], axis=1
+    ).ravel()
+
+    split_path = _config_path(cfg, "paths", "splits_dir") / "test.csv"
+    if not split_path.is_file():
+        raise FileNotFoundError(f"Missing test split for domain analysis: {split_path}")
+    domains = pd.read_csv(split_path, usecols=["id", "domain"])
+    domain_ids = domains["id"].astype(str)
+    domains = domains.assign(_join_id=domain_ids).drop(columns=["id"])
+    predictions["_join_id"] = predictions["id"].astype(str)
+    predictions = predictions.merge(domains, on="_join_id", how="left", validate="one_to_one")
+    if predictions["domain"].isna().any():
+        missing_ids = predictions.loc[predictions["domain"].isna(), "id"].tolist()
+        raise ValueError(f"test split is missing domain for prediction id {missing_ids[0]!r}")
+    predictions["word_count"] = predictions["text_clean"].fillna("").astype(str).str.split().str.len()
+    predictions["length_bucket"] = predictions["word_count"].map(_length_bucket)
+
+    misclassified = predictions.loc[predictions["is_error"]].copy()
+    misclassified["true_class"] = misclassified["true"].map(labels)
+    misclassified["predicted_class"] = misclassified["pred"].map(labels)
+    misclassified = misclassified.sort_values(
+        ["predicted_probability", "true", "pred"],
+        ascending=[False, True, True],
+    )
+    misclassified_path = metrics_dir / "misclassified.csv"
+    misclassified[
+        [
+            "id",
+            "text_clean",
+            "true_class",
+            "predicted_class",
+            "predicted_probability",
+        ]
+    ].to_csv(misclassified_path, index=False)
+
+    domain_rates = _group_error_rates(predictions, "domain")
+    length_rates = _group_error_rates(
+        predictions.assign(length_bucket=pd.Categorical(
+            predictions["length_bucket"],
+            categories=["<50", "50-100", "100-200", ">200"],
+            ordered=True,
+        )),
+        "length_bucket",
+    )
+    pair_tables: dict[str, pd.DataFrame] = {}
+    for (true_label, predicted_label), group in misclassified.groupby(
+        ["true", "pred"], sort=True
+    ):
+        pair_name = f"{labels[int(true_label)]} -> {labels[int(predicted_label)]}"
+        pair_tables[pair_name] = group.nlargest(5, "predicted_probability")[
+            ["id", "text_clean", "predicted_probability"]
+        ].rename(columns={"text_clean": "review"})
+
+    report_lines = [
+        "# Error Analysis",
+        "",
+        f"Total predictions: {len(predictions)}",
+        f"Total errors: {int(predictions['is_error'].sum())}",
+        "",
+        "## Error rate by domain",
+        "",
+        _markdown_table(domain_rates),
+        "",
+        "## Error rate by review length",
+        "",
+        _markdown_table(length_rates),
+        "",
+        "## Five most confident wrong predictions by confusion pair",
+        "",
+    ]
+    if not pair_tables:
+        report_lines.append("_No misclassified predictions._")
+    else:
+        for pair_name, table in pair_tables.items():
+            report_lines.extend([f"### {pair_name}", "", _markdown_table(table), ""])
+    report_path = metrics_dir / "error_analysis.md"
+    report_path.write_text("\n".join(report_lines), encoding="utf-8")
+    return {
+        "misclassified_path": misclassified_path,
+        "report_path": report_path,
+        "domain_rates": domain_rates,
+        "length_rates": length_rates,
+        "pair_tables": pair_tables,
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
-    """Write grouped binary metrics and confusion-cell errors from metrics.json."""
+    """Write confusion metrics, error breakdown, and detailed error analysis."""
     from src.config import load_config
     from src.utils import load_json, save_json
 
@@ -166,8 +332,11 @@ def main(argv: list[str] | None = None) -> None:
     binary_path = save_json(binary_metrics(matrix), metrics_dir / "binary_metrics.json")
     errors_path = metrics_dir / "error_breakdown.csv"
     error_breakdown(matrix).to_csv(errors_path, index=False)
+    analysis = error_analysis(cfg)
     print(f"wrote {binary_path}")
     print(f"wrote {errors_path}")
+    print(f"wrote {analysis['misclassified_path']}")
+    print(f"wrote {analysis['report_path']}")
 
 
 if __name__ == "__main__":
