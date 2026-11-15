@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,8 @@ import pytest
 
 from src.config import load_config
 from src.embed import CLS_DIM, SPLIT_NAMES, embed_texts, embedding_paths, load_encoder
+
+pytestmark = pytest.mark.slow
 
 
 def _require_embedding_files() -> None:
@@ -57,7 +60,7 @@ def test_y_and_ids_match_split_csv_row_order() -> None:
 
 
 @pytest.fixture(scope="module")
-def frozen_encoder():
+def frozen_encoder() -> tuple[Any, Any, str]:
     """Load the frozen DistilBERT encoder once for the slow tests."""
     cfg = load_config()
     encoder, device = load_encoder(cfg)
@@ -65,14 +68,14 @@ def frozen_encoder():
 
 
 @pytest.mark.slow
-def test_encoder_parameters_require_grad_false(frozen_encoder) -> None:
+def test_encoder_parameters_require_grad_false(frozen_encoder: tuple[Any, Any, str]) -> None:
     """Every encoder parameter has requires_grad == False."""
     _cfg, encoder, _device = frozen_encoder
     assert all(param.requires_grad is False for param in encoder.parameters())
 
 
 @pytest.mark.slow
-def test_same_review_embedded_twice_matches(frozen_encoder) -> None:
+def test_same_review_embedded_twice_matches(frozen_encoder: tuple[Any, Any, str]) -> None:
     """Embedding the same review twice yields max abs difference below 1e-5."""
     cfg, encoder, device = frozen_encoder
     cfg.training.embed_batch_size = 1
@@ -85,7 +88,7 @@ def test_same_review_embedded_twice_matches(frozen_encoder) -> None:
 
 
 @pytest.mark.slow
-def test_padding_mask_keeps_short_review_stable(frozen_encoder) -> None:
+def test_padding_mask_keeps_short_review_stable(frozen_encoder: tuple[Any, Any, str]) -> None:
     """A short review alone matches the same review batched with a much longer one."""
     cfg, encoder, device = frozen_encoder
     short = "the hotel was clean"

@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.check_data import build_data_card, check_leakage, run_check_data, run_checks
 from src.config import load_config
 
 
+@pytest.mark.slow
 def test_real_splits_pass_and_data_card_is_written() -> None:
     """Real splits pass every check and data_card.md has both tables."""
     issues, path = run_check_data()

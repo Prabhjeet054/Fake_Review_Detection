@@ -86,7 +86,7 @@ def check_class_counts(splits: dict[str, pd.DataFrame], config: AttrDict) -> lis
             n = int(counts.get(label, 0))
             if n <= 0:
                 issues.append(f"{name}: class {label} has {n} rows")
-        unexpected = sorted(set(int(value) for value in frame["label"].dropna()) - set(expected))
+        unexpected = sorted({int(value) for value in frame["label"].dropna()} - set(expected))
         if unexpected:
             issues.append(f"{name}: unexpected labels {unexpected}")
     dataset_path = Path(config.paths.processed_dir) / "dataset.csv"

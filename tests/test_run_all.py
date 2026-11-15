@@ -104,6 +104,7 @@ def test_stop_at_first_failing_stage(tmp_path: Path) -> None:
     called: list[str] = []
 
     def fail() -> None:
+        """Raise so the pipeline records a failed data stage."""
         called.append("data")
         raise RuntimeError("boom")
 

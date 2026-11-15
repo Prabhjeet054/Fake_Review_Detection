@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,8 @@ from sklearn.metrics import classification_report
 from src.config import find_project_root, load_config
 from src.evaluate import class_names, evaluate_test
 from src.utils import load_json
+
+pytestmark = pytest.mark.slow
 
 METRICS_PATH = find_project_root() / "outputs" / "metrics" / "metrics.json"
 PREDS_PATH = find_project_root() / "outputs" / "metrics" / "test_predictions.csv"
@@ -24,7 +26,7 @@ def _require_eval_outputs() -> None:
         raise FileNotFoundError("Missing metrics.json or test_predictions.csv. Run python -m src.evaluate first.")
 
 
-def _metrics_from_confusion(cm: np.ndarray) -> dict:
+def _metrics_from_confusion(cm: np.ndarray) -> dict[str, Any]:
     """Recompute accuracy, per-class P/R/F1, averages, and kappa from a confusion matrix."""
     cm = np.asarray(cm, dtype=np.float64)
     n_test = float(cm.sum())

@@ -53,6 +53,7 @@ def test_overfit_32_embeddings_reaches_perfect_train_accuracy() -> None:
     assert acc == 1.0, f"overfit train_acc={acc} after 300 steps, expected 1.0"
 
 
+@pytest.mark.slow
 def test_real_history_csv_has_50_epochs_and_required_columns() -> None:
     """Real history.csv has 50 rows, epochs 1..50, and the five required columns."""
     history = _real_history()
@@ -65,6 +66,7 @@ def test_real_history_csv_has_50_epochs_and_required_columns() -> None:
     print(f"best_epoch={best_epoch}")
 
 
+@pytest.mark.slow
 def test_train_loss_drops_from_epoch_1_to_50() -> None:
     """train_loss at epoch 50 is lower than at epoch 1."""
     history = _real_history()
@@ -73,6 +75,7 @@ def test_train_loss_drops_from_epoch_1_to_50() -> None:
     assert loss_50 < loss_1, f"train_loss epoch50={loss_50} >= epoch1={loss_1}"
 
 
+@pytest.mark.slow
 def test_two_cpu_runs_match_for_first_five_epochs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Two trainings with seed 42 match for 5 epochs within 1e-6 on CPU."""
     monkeypatch.setattr("src.train.get_device", lambda: "cpu")
@@ -95,6 +98,7 @@ def test_two_cpu_runs_match_for_first_five_epochs(tmp_path: Path, monkeypatch: p
         )
 
 
+@pytest.mark.slow
 def test_head_best_reproduces_recorded_val_acc() -> None:
     """Evaluating head_best.pt on val matches history val_acc for its epoch."""
     if not BEST_PATH.is_file():

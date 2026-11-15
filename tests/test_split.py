@@ -6,9 +6,12 @@ import hashlib
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.config import load_config
 from src.split import split_dataset
+
+pytestmark = pytest.mark.slow
 
 SPLIT_NAMES = ("train", "val", "test")
 

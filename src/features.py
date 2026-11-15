@@ -61,7 +61,7 @@ def make_tfidf_features(
     out_path = Path(cfg.paths.models_dir) / "tfidf.joblib"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(vectorizer, out_path)
-    vocab_size = int(len(vectorizer.get_feature_names_out()))
+    vocab_size = len(vectorizer.get_feature_names_out())
     logger.info("TF-IDF vocabulary size=%s", vocab_size)
     logger.info(
         "TF-IDF matrix shapes X_train=%s X_val=%s X_test=%s",

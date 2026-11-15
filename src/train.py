@@ -26,6 +26,7 @@ def serialize_config(config: AttrDict) -> dict[str, Any]:
     """Convert config to a plain JSON-like dict (paths become strings)."""
 
     def convert(value: Any) -> Any:
+        """Recursively convert AttrDict values and Paths into JSON-safe objects."""
         if isinstance(value, dict):
             return {str(key): convert(item) for key, item in value.items()}
         if isinstance(value, Path):

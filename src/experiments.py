@@ -20,7 +20,6 @@ from src.model import ClassifierHead
 from src.tokenization import tokenize_texts
 from src.utils import get_device, set_seed
 
-
 VARIANT_COLUMNS = (
     "variant",
     "val_accuracy",
@@ -50,7 +49,7 @@ def best_model(rows: list[dict[str, Any]], metric: str) -> dict[str, Any] | None
     return max(scored, key=lambda row: float(row[metric])) if scored else None
 
 
-def collect_results(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+def collect_results(cfg: AttrDict | dict[str, Any]) -> list[dict[str, Any]]:
     """Load rows from the experiment CSV when it exists."""
     path = Path(cfg["paths"]["metrics_dir"]) / "experiments.csv"
     if not path.exists():

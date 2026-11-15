@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -45,10 +46,10 @@ def _class_counts(frame: pd.DataFrame) -> dict[str, int]:
     return {str(int(label)): int(count) for label, count in counts.items()}
 
 
-def split_summary(splits: dict[str, pd.DataFrame]) -> dict:
+def split_summary(splits: dict[str, pd.DataFrame]) -> dict[str, dict[str, Any]]:
     """Build row counts and class counts per split."""
     return {
-        name: {"n_rows": int(len(frame)), "class_counts": _class_counts(frame)}
+        name: {"n_rows": len(frame), "class_counts": _class_counts(frame)}
         for name, frame in splits.items()
     }
 

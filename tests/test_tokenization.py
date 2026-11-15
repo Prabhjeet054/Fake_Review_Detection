@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from src.config import load_config
 from src.tokenization import get_tokenizer, tokenize_texts
+
+pytestmark = pytest.mark.slow
 
 CLS_ID = 101
 SEP_ID = 102

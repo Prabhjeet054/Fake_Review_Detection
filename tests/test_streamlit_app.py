@@ -1,10 +1,14 @@
 """Tests for app/streamlit_app.py."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 APP_PATH = Path(__file__).resolve().parent.parent / "app" / "streamlit_app.py"
+pytestmark = pytest.mark.slow
 
 
 def test_app_renders_detector_tabs() -> None:

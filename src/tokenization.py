@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -21,12 +22,12 @@ SPLIT_NAMES = ("train", "val", "test")
 
 
 @lru_cache(maxsize=4)
-def _load_tokenizer(model_name: str):
+def _load_tokenizer(model_name: str) -> Any:
     """Load and cache a Hugging Face tokenizer by model name."""
     return AutoTokenizer.from_pretrained(model_name)
 
 
-def get_tokenizer(config: AttrDict):
+def get_tokenizer(config: AttrDict) -> Any:
     """Return AutoTokenizer.from_pretrained(config.model.name), loaded once and cached."""
     return _load_tokenizer(str(config.model.name))
 
@@ -44,7 +45,7 @@ def tokenize_texts(texts: list[str], config: AttrDict) -> tuple[torch.Tensor, to
     return encoded["input_ids"], encoded["attention_mask"]
 
 
-def _untruncated_lengths(texts: list[str], tokenizer) -> list[int]:
+def _untruncated_lengths(texts: list[str], tokenizer: Any) -> list[int]:
     """Return token counts including special tokens, with no truncation."""
     encoded = tokenizer(
         texts,
@@ -63,14 +64,14 @@ def _load_split(config: AttrDict, name: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def token_length_report(config: AttrDict | None = None) -> dict:
+def token_length_report(config: AttrDict | None = None) -> dict[str, Any]:
     """Summarize untruncated token lengths per split and class, then save figure and JSON."""
     cfg = config if config is not None else load_config()
     set_seed(int(cfg.seed))
     ensure_dirs(cfg)
     tokenizer = get_tokenizer(cfg)
     max_length = int(cfg.model.max_length)
-    report: dict = {"model": str(cfg.model.name), "max_length": max_length, "splits": {}}
+    report: dict[str, Any] = {"model": str(cfg.model.name), "max_length": max_length, "splits": {}}
     plot_rows: list[dict] = []
     for split in SPLIT_NAMES:
         frame = _load_split(cfg, split)
@@ -80,7 +81,7 @@ def token_length_report(config: AttrDict | None = None) -> dict:
         work["n_tokens"] = lengths
         split_stats: dict[str, dict] = {}
         for label, group in work.groupby("label"):
-            n = int(len(group))
+            n = len(group)
             over = int((group["n_tokens"] > max_length).sum())
             split_stats[str(int(label))] = {
                 "name": ID2LABEL.get(int(label), str(label)),

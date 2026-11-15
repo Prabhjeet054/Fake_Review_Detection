@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 APP_PATH = Path(__file__).resolve().parent.parent / "app" / "streamlit_app.py"
+pytestmark = pytest.mark.slow
 CLASS_NAMES = ("Genuine Human", "Fake Human-Written", "AI-Generated")
 
 

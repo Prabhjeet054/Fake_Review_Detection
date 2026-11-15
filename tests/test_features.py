@@ -7,7 +7,7 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-from src.config import load_config
+from src.config import AttrDict, load_config
 from src.features import make_tfidf_features
 
 
@@ -41,7 +41,7 @@ def _zebra_fixture(split_dir: Path) -> None:
     ).to_csv(split_dir / "test.csv", index=False)
 
 
-def _tiny_config(tmp_path: Path):
+def _tiny_config(tmp_path: Path) -> AttrDict:
     """Return a config that reads the zebra fixture and writes tfidf.joblib under tmp_path."""
     cfg = load_config()
     cfg.tfidf.min_df = 1

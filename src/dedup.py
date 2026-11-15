@@ -17,6 +17,7 @@ class UnionFind:
     """Disjoint-set structure that merges near-duplicate row indices."""
 
     def __init__(self, n: int) -> None:
+        """Initialize n singleton sets."""
         self.parent = list(range(n))
         self.rank = [0] * n
 

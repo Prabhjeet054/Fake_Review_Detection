@@ -78,7 +78,7 @@ def build_eda_summary(df: pd.DataFrame) -> dict:
             "max": int(lengths.max()) if len(lengths) else 0,
         }
     return {
-        "n_rows": int(len(work)),
+        "n_rows": len(work),
         "counts_per_class": {
             str(int(label)): {"name": _class_name(int(label)), "count": int(count)}
             for label, count in counts.items()

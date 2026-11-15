@@ -5,9 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from sklearn.metrics import accuracy_score, f1_score
 
 from src.config import load_config
+
+pytestmark = pytest.mark.slow
 
 METRIC_COLUMNS = ("accuracy", "macro_precision", "macro_recall", "macro_f1", "weighted_f1")
 EXPECTED_MODELS = {

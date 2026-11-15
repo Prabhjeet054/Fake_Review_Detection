@@ -1,10 +1,13 @@
 """Tests for confusion-matrix analysis."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.analysis import binary_metrics, error_analysis, error_breakdown
 
@@ -88,6 +91,7 @@ def test_error_analysis_writes_misclassified_rows_and_report(tmp_path: Path) -> 
     assert "Genuine Human -> Fake Human-Written" in report
 
 
+@pytest.mark.slow
 def test_real_misclassified_output_matches_metrics() -> None:
     """The real misclassified artifact has the expected rows and labels."""
     root = Path(__file__).resolve().parent.parent
@@ -100,6 +104,7 @@ def test_real_misclassified_output_matches_metrics() -> None:
     assert errors["predicted_probability"].is_monotonic_decreasing
 
 
+@pytest.mark.slow
 def test_real_length_buckets_cover_test_rows_once() -> None:
     """The markdown length table accounts for every test row exactly once."""
     root = Path(__file__).resolve().parent.parent

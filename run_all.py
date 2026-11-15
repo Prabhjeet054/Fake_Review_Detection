@@ -207,7 +207,7 @@ def run_pipeline(
             print(f"Stage {stage} failed: {message}", file=sys.stderr)
             results.append(StageResult(stage, "failed", elapsed, message))
             return results
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             elapsed = time.perf_counter() - started
             message = str(exc) or exc.__class__.__name__
             print(f"Stage {stage} failed: {message}", file=sys.stderr)

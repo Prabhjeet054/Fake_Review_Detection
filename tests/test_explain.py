@@ -1,6 +1,9 @@
 """Tests for attention and occlusion explanations."""
 
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import pytest
 import torch
@@ -18,16 +21,18 @@ from src.explain import (
 class FakeTokenizer:
     """Tokenizer fake exposing the interfaces used by attention_view."""
 
-    all_special_tokens = {"[CLS]", "[SEP]", "[PAD]"}
+    all_special_tokens: ClassVar[set[str]] = {"[CLS]", "[SEP]", "[PAD]"}
 
-    def __call__(self, texts, **kwargs):
+    def __call__(self, texts: list[str], **kwargs: Any) -> dict[str, Any]:
+        """Return a fixed input_ids and attention_mask batch."""
         del texts, kwargs
         return {
             "input_ids": torch.tensor([[101, 10, 11, 12, 102, 0, 0, 0]]),
             "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 0, 0, 0]]),
         }
 
-    def convert_ids_to_tokens(self, token_ids):
+    def convert_ids_to_tokens(self, token_ids: list[int]) -> list[str]:
+        """Return a canned WordPiece sequence including a ##piece."""
         del token_ids
         return ["[CLS]", "great", "##ly", "product", "[SEP]", "[PAD]", "[PAD]", "[PAD]"]
 
@@ -35,7 +40,8 @@ class FakeTokenizer:
 class FakeEncoder:
     """Encoder fake returning one last-layer attention tensor."""
 
-    def __call__(self, **kwargs):
+    def __call__(self, **kwargs: Any) -> SimpleNamespace:
+        """Return a last-layer attention tensor with CLS weights on three tokens."""
         del kwargs
         attention = torch.zeros(1, 2, 8, 8)
         attention[:, :, :, :] = 1 / 8
@@ -50,13 +56,14 @@ class FakeEncoder:
 class FakeClassifier:
     """Minimal classifier fake for explanation views."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Build a fake classifier with a tokenizer and encoder."""
         self.config = SimpleNamespace(model=SimpleNamespace(max_length=8))
         self.device = "cpu"
         self.tokenizer = FakeTokenizer()
         self.encoder = FakeEncoder()
 
-    def predict(self, texts):
+    def predict(self, texts: list[str]) -> list[dict[str, Any]]:
         """Return probabilities that decrease as words are removed."""
         probability = min(0.95, 0.5 + 0.05 * len(texts[0].split()))
         return [
@@ -105,6 +112,7 @@ def test_render_html_escapes_words_and_highlights_weights() -> None:
     assert "weight=1.0000" in rendered
 
 
+@pytest.mark.slow
 def test_saved_explanations_exist_for_nine_examples() -> None:
     """The generated explanation directory contains all nine requested files."""
     from pathlib import Path

@@ -111,7 +111,7 @@ def load_config(path: str | Path = "config.yaml") -> AttrDict:
     with config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
     if not isinstance(raw, dict):
-        raise ValueError("config.yaml must contain a mapping at the top level.")
+        raise TypeError("config.yaml must contain a mapping at the top level.")
     cfg = to_attr_dict(raw)
     validate_config(cfg)
     resolve_paths(cfg, root)

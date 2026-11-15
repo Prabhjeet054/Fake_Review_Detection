@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.config import load_config
+from src.config import AttrDict, load_config
 from src.load_data import build_dataset
 from src.schema import REQUIRED_COLUMNS, validate_dataframe
 
@@ -19,7 +19,7 @@ def _md5(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
-def _fixture_config(tmp_path: Path, genuine: int = 2, ai: int = 2):
+def _fixture_config(tmp_path: Path, genuine: int = 2, ai: int = 2) -> AttrDict:
     """Return a config that loads fixtures and writes merged.csv under tmp_path."""
     cfg = load_config()
     cfg.data.salminen_file = FIXTURES / "salminen_sample.csv"

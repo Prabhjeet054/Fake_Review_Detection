@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
-import torch
 
 from src.config import find_project_root, load_config
 from src.embed import load_encoder
@@ -75,6 +72,7 @@ def test_finetune_unfreezes_only_last_two_layers_and_head() -> None:
     assert n_last_two > 0
 
 
+@pytest.mark.slow
 def test_experiments_csv_one_row_per_variant_and_best_is_max_val_macro_f1() -> None:
     """experiments.csv has one row per run variant; best is highest val macro F1."""
     if not EXPERIMENTS_CSV.is_file():

@@ -18,6 +18,7 @@ class ClassifierHead(nn.Module):
     """Linear(768, hidden_units) -> ReLU -> Dropout -> Linear(hidden_units, num_classes)."""
 
     def __init__(self, config: AttrDict) -> None:
+        """Build the two-layer classification head from config."""
         super().__init__()
         hidden_units = int(config.model.hidden_units)
         dropout = float(config.model.dropout)
@@ -38,6 +39,7 @@ class DistilBertClassifier(nn.Module):
     """Frozen DistilBERT encoder plus ClassifierHead, used at inference time."""
 
     def __init__(self, config: AttrDict | None = None, encoder: nn.Module | None = None) -> None:
+        """Load or accept a frozen encoder and attach ClassifierHead."""
         super().__init__()
         cfg = config if config is not None else load_config()
         self.config = cfg

@@ -5,12 +5,17 @@ from __future__ import annotations
 import inspect
 import time
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.dummy import DummyClassifier
-from sklearn.ensemble import AdaBoostClassifier, GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    AdaBoostClassifier,
+    GradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import LinearSVC
@@ -41,14 +46,14 @@ DISPLAY_NAMES = {
 }
 
 
-def _with_seed(cls: type, seed: int, **kwargs):
+def _with_seed(cls: type, seed: int, **kwargs: Any) -> Any:
     """Construct an estimator, passing random_state when the class supports it."""
     if "random_state" in inspect.signature(cls.__init__).parameters:
         kwargs["random_state"] = seed
     return cls(**kwargs)
 
 
-def build_estimators(seed: int) -> dict:
+def build_estimators(seed: int) -> dict[str, Any]:
     """Return the configured baseline estimators, seeded where supported."""
     return {
         "majority_class": _with_seed(DummyClassifier, seed, strategy="most_frequent"),
@@ -61,7 +66,7 @@ def build_estimators(seed: int) -> dict:
     }
 
 
-def _as_matrix(name: str, matrix):
+def _as_matrix(name: str, matrix: Any) -> Any:
     """Return a dense array for models that do not accept sparse input."""
     if name in DENSE_MODELS and hasattr(matrix, "toarray"):
         return matrix.toarray()

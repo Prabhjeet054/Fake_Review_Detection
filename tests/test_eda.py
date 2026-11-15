@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+import pytest
 
 from src.config import load_config
 from src.utils import load_json
 
+pytestmark = pytest.mark.slow
 
-def _cleaned_and_summary() -> tuple[pd.DataFrame, dict]:
+
+def _cleaned_and_summary() -> tuple[pd.DataFrame, dict[str, Any]]:
     """Load cleaned.csv and the written EDA JSON."""
     cfg = load_config()
     cleaned_path = Path(cfg.paths.interim_dir) / "cleaned.csv"

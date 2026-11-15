@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -72,7 +73,7 @@ def _split_rows(split: str, config: AttrDict | None = None) -> pd.DataFrame:
     return df
 
 
-def build_baselines_figure(split: str, config: AttrDict | None = None):
+def build_baselines_figure(split: str, config: AttrDict | None = None) -> tuple[Any, Any]:
     """Rebuild the grouped bar chart and return (figure, axes) without saving."""
     df = _split_rows(split, config)
     x = np.arange(len(CLASSIFIER_ORDER))
@@ -133,7 +134,7 @@ def best_epoch_from_history(history: pd.DataFrame) -> int:
     return int(history.loc[history["val_loss"].idxmin(), "epoch"])
 
 
-def _apply_curve_style(ax, title: str, ylabel: str, best_epoch: int, n_epochs: int) -> None:
+def _apply_curve_style(ax: Any, title: str, ylabel: str, best_epoch: int, n_epochs: int) -> None:
     """Apply the shared curve style: title, labels, 1..N x-axis, light grid, best-epoch line."""
     ax.set_title(title)
     ax.set_xlabel("Epoch")
@@ -146,7 +147,7 @@ def _apply_curve_style(ax, title: str, ylabel: str, best_epoch: int, n_epochs: i
     ax.legend(frameon=True)
 
 
-def build_history_curve(kind: str, history: pd.DataFrame):
+def build_history_curve(kind: str, history: pd.DataFrame) -> tuple[Any, Any]:
     """Build an accuracy or loss curve figure; kind is 'accuracy' or 'loss'."""
     if kind not in {"accuracy", "loss"}:
         raise ValueError(f"kind must be 'accuracy' or 'loss', got {kind!r}")
@@ -186,7 +187,7 @@ def plot_history(config: AttrDict | None = None) -> dict[str, Path]:
     return paths
 
 
-def load_metrics(config: AttrDict | None = None) -> dict:
+def load_metrics(config: AttrDict | None = None) -> dict[str, Any]:
     """Load outputs/metrics/metrics.json from the test-set evaluation."""
     cfg = config if config is not None else load_config()
     path = Path(cfg.paths.metrics_dir) / "metrics.json"
@@ -212,7 +213,7 @@ def confusion_arrays(config: AttrDict | None = None) -> tuple[np.ndarray, np.nda
     return counts, normalized, names
 
 
-def build_confusion_heatmap(normalized: bool, config: AttrDict | None = None):
+def build_confusion_heatmap(normalized: bool, config: AttrDict | None = None) -> tuple[Any, Any]:
     """Build a seaborn heatmap of counts or row-normalised percents."""
     counts, percents, names = confusion_arrays(config)
     data = percents if normalized else counts
@@ -258,7 +259,7 @@ def plot_confusion_matrix(config: AttrDict | None = None) -> dict[str, Path]:
     return paths
 
 
-def build_per_class_metrics_figure(config: AttrDict | None = None):
+def build_per_class_metrics_figure(config: AttrDict | None = None) -> tuple[Any, Any]:
     """Build a grouped bar chart of precision, recall, and F1 per class."""
     cfg = config if config is not None else load_config()
     metrics = load_metrics(cfg)

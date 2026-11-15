@@ -27,6 +27,7 @@ def test_clean_text_exact_cases(raw: str, expected: str) -> None:
     assert clean_text(raw) == expected
 
 
+@pytest.mark.slow
 def test_clean_text_is_idempotent_on_real_reviews() -> None:
     """Cleaning 50 random real reviews twice equals cleaning them once."""
     cfg = load_config()

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.config import find_project_root, load_config, validate_config, to_attr_dict
+from src.config import find_project_root, load_config, to_attr_dict, validate_config
 
 
 def test_load_config_attribute_access() -> None:

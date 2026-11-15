@@ -12,6 +12,8 @@ import pytest
 from src.config import load_config
 from src.predict import ReviewClassifier
 
+pytestmark = pytest.mark.slow
+
 ROOT = Path(__file__).resolve().parent.parent
 METRICS_DIR = ROOT / "outputs" / "metrics"
 

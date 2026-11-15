@@ -125,7 +125,7 @@ def compute_metrics(
         for index in labels
     }
     matrix = confusion_matrix(y_true, y_pred, labels=labels)
-    n_test = int(len(y_true))
+    n_test = len(y_true)
     n_correct = int((y_true == y_pred).sum())
     return {
         "n_test": n_test,

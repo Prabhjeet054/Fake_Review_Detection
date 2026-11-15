@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 from matplotlib.patches import Rectangle
-import matplotlib.pyplot as plt
 
 from src.config import load_config
+
+pytestmark = pytest.mark.slow
 from src.plots import (
     CLASSIFIER_ORDER,
     CURVE_FIGSIZE,
@@ -27,9 +29,7 @@ from src.plots import (
     load_history,
     load_metrics,
     plot_baselines,
-    plot_confusion_matrix,
     plot_history,
-    plot_per_class_metrics,
 )
 
 
@@ -95,7 +95,7 @@ def test_plot_history_writes_pngs_and_shared_style(tmp_path: Path) -> None:
         assert ax.get_title() == expected_titles[kind]
         assert ax.get_xlabel() == "Epoch"
         assert ax.get_xlim() == (1.0, float(n_epochs))
-        handles, labels = ax.get_legend_handles_labels()
+        _handles, labels = ax.get_legend_handles_labels()
         assert labels == expected_labels[kind]
         dotted = [line for line in ax.lines if line.get_linestyle() == ":"]
         assert len(dotted) == 1

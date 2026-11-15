@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -16,7 +17,7 @@ from src.utils import get_device, get_logger, load_json, save_json, set_seed
 ROOT = find_project_root()
 
 
-def _raw_config() -> dict:
+def _raw_config() -> dict[str, Any]:
     """Load the on-disk YAML without resolving or validating extras."""
     with (ROOT / "config.yaml").open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)

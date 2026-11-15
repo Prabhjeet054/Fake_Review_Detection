@@ -8,7 +8,14 @@ import numpy as np
 import pytest
 
 from src.config import AttrDict, load_config
-from src.utils import ensure_dirs, get_device, get_logger, load_json, save_json, set_seed
+from src.utils import (
+    ensure_dirs,
+    get_device,
+    get_logger,
+    load_json,
+    save_json,
+    set_seed,
+)
 
 
 def test_set_seed_is_deterministic() -> None:

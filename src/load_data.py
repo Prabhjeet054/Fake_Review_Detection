@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -50,7 +51,7 @@ def _read_preview(csv_path: Path, title: str) -> pd.DataFrame:
     return raw
 
 
-def _drop_empty_text(df: pd.DataFrame, logger, dataset_name: str) -> pd.DataFrame:
+def _drop_empty_text(df: pd.DataFrame, logger: logging.Logger, dataset_name: str) -> pd.DataFrame:
     """Drop rows whose text is NaN or blank after strip, and log the count."""
     empty_text = df["text"].isna() | df["text"].astype(str).str.strip().eq("")
     n_dropped_text = int(empty_text.sum())
