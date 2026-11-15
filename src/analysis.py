@@ -1,16 +1,87 @@
-"""Error analysis on the held-out test split."""
+"""Confusion-matrix metrics and error analysis for the held-out test split."""
 
 from __future__ import annotations
 
+import argparse
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from src.config import label_names, load_config, parse_config_args, path_from_cfg
-from src.embed import load_embeddings
-from src.evaluate import compute_metrics, predict_classifier, save_metrics
-from src.utils import load_dataframe, save_dataframe, save_json, seed_from_cfg, set_seed, setup_logging
+CLASS_NAMES = ("Genuine Human", "Fake Human-Written", "AI-Generated")
+
+
+def _validate_confusion_matrix(cm: Any) -> np.ndarray:
+    """Return a validated 3x3 confusion matrix as floating-point counts."""
+    matrix = np.asarray(cm)
+    if matrix.shape != (3, 3):
+        raise ValueError(f"cm must have shape (3, 3), got {matrix.shape}")
+    if not np.issubdtype(matrix.dtype, np.number):
+        raise ValueError("cm must contain numeric counts")
+    if not np.isfinite(matrix).all() or (matrix < 0).any():
+        raise ValueError("cm must contain finite, non-negative counts")
+    if not np.equal(matrix, np.floor(matrix)).all():
+        raise ValueError("cm must contain integer counts")
+    return matrix.astype(np.float64, copy=False)
+
+
+def _binary_scores(matrix: np.ndarray, positive: tuple[int, ...]) -> dict[str, float]:
+    """Calculate accuracy, precision, and recall for a grouped binary task."""
+    positive_mask = np.zeros(3, dtype=bool)
+    positive_mask[list(positive)] = True
+    true_positive = float(matrix[np.ix_(positive_mask, positive_mask)].sum())
+    false_positive = float(matrix[~positive_mask][:, positive_mask].sum())
+    false_negative = float(matrix[positive_mask][:, ~positive_mask].sum())
+    true_negative = float(matrix[~positive_mask][:, ~positive_mask].sum())
+    total = true_positive + false_positive + false_negative + true_negative
+    return {
+        "accuracy": (true_positive + true_negative) / total if total else 0.0,
+        "precision": (
+            true_positive / (true_positive + false_positive)
+            if true_positive + false_positive
+            else 0.0
+        ),
+        "recall": (
+            true_positive / (true_positive + false_negative)
+            if true_positive + false_negative
+            else 0.0
+        ),
+    }
+
+
+def binary_metrics(cm: Any) -> dict[str, dict[str, float]]:
+    """Return grouped binary metrics for the two requested class mappings."""
+    matrix = _validate_confusion_matrix(cm)
+    return {
+        "genuine_vs_deceptive": _binary_scores(matrix, (1, 2)),
+        "human_vs_ai_generated": _binary_scores(matrix, (2,)),
+    }
+
+
+def error_breakdown(cm: Any) -> pd.DataFrame:
+    """Return every off-diagonal confusion cell and its share of all errors."""
+    matrix = _validate_confusion_matrix(cm)
+    total_errors = float(matrix.sum() - np.trace(matrix))
+    rows = [
+        {
+            "true_class": true_class,
+            "predicted_class": predicted_class,
+            "count": int(matrix[true_class, predicted_class]),
+            "share_of_errors": (
+                float(matrix[true_class, predicted_class] / total_errors)
+                if total_errors
+                else 0.0
+            ),
+        }
+        for true_class in range(3)
+        for predicted_class in range(3)
+        if true_class != predicted_class
+    ]
+    return pd.DataFrame(rows).sort_values(
+        ["count", "true_class", "predicted_class"],
+        ascending=[False, True, True],
+        ignore_index=True,
+    )
 
 
 def attach_predictions(
@@ -30,7 +101,8 @@ def attach_predictions(
         }
     )
     merged = df.merge(pred_df, on=id_col, how="inner")
-    names = label_names(cfg)
+    names = cfg.get("labels", {index: name for index, name in enumerate(CLASS_NAMES)})
+    names = {int(key): str(value) for key, value in names.items()}
     merged["true_name"] = merged["y_true"].map(names)
     merged["pred_name"] = merged["y_pred"].map(names)
     merged["is_error"] = merged["y_true"] != merged["y_pred"]
@@ -67,6 +139,8 @@ def confusion_pairs(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 def metrics_by_source(df: pd.DataFrame, cfg: dict[str, Any]) -> dict[str, Any]:
     """Compute overall accuracy per data source."""
+    from src.evaluate import compute_metrics
+
     source_col = cfg["columns"]["source"]
     if source_col not in df.columns:
         return {}
@@ -77,33 +151,23 @@ def metrics_by_source(df: pd.DataFrame, cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Write error tables and source-wise metrics for the test split."""
-    args = parse_config_args(argv)
+    """Write grouped binary metrics and confusion-cell errors from metrics.json."""
+    from src.config import load_config
+    from src.utils import load_json, save_json
+
+    parser = argparse.ArgumentParser(description="Analyze the saved test confusion matrix.")
+    parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
+    args = parser.parse_args(argv)
     cfg = load_config(args.config)
-    set_seed(seed_from_cfg(cfg))
-    logger = setup_logging(cfg)
-    test_df = load_dataframe(path_from_cfg(cfg, "paths.splits") / "test.csv")
-    embeddings, labels, ids = load_embeddings(cfg, "test")
-    preds = predict_classifier(embeddings, cfg)
-    merged = attach_predictions(test_df, ids, labels, preds, cfg)
-    errors = error_slice(merged, cfg)
-    metrics_dir = path_from_cfg(cfg, "paths.metrics")
-    save_dataframe(errors, metrics_dir / "error_examples.csv")
-    by_source = metrics_by_source(merged, cfg)
-    for source, metrics in by_source.items():
-        save_metrics(metrics, cfg, f"deep_model_test_{source}")
-    summary = {
-        "n_test": int(len(merged)),
-        "n_errors": int(merged["is_error"].sum()),
-        "error_rate": float(merged["is_error"].mean()) if len(merged) else 0.0,
-        "confusion_pairs": confusion_pairs(merged),
-        "errors_by_source": merged.groupby(cfg["columns"]["source"])["is_error"].mean().to_dict()
-        if cfg["columns"]["source"] in merged.columns
-        else {},
-    }
-    path = save_json(summary, metrics_dir / "error_analysis.json")
-    logger.info("Error analysis: %s errors / %s", summary["n_errors"], summary["n_test"])
-    print(f"wrote {path} errors={summary['n_errors']}")
+    metrics_dir = cfg.paths.metrics_dir
+    metrics_path = metrics_dir / "metrics.json"
+    metrics = load_json(metrics_path)
+    matrix = metrics["confusion_matrix"]
+    binary_path = save_json(binary_metrics(matrix), metrics_dir / "binary_metrics.json")
+    errors_path = metrics_dir / "error_breakdown.csv"
+    error_breakdown(matrix).to_csv(errors_path, index=False)
+    print(f"wrote {binary_path}")
+    print(f"wrote {errors_path}")
 
 
 if __name__ == "__main__":

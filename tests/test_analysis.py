@@ -1,21 +1,51 @@
-"""Tests for src.analysis."""
+"""Tests for confusion-matrix analysis."""
 
 import numpy as np
-import pandas as pd
 
-from src.analysis import attach_predictions, confusion_pairs, error_slice
+from src.analysis import binary_metrics, error_breakdown
+
+CONFUSION_MATRIX = np.array(
+    [
+        [79, 4, 3],
+        [60, 242, 11],
+        [7, 43, 135],
+    ]
+)
 
 
-def test_error_slice_and_pairs(cfg: dict, reviews_df: pd.DataFrame) -> None:
-    """Misclassified rows are isolated and confusion pairs counted."""
-    subset = reviews_df.head(6).copy()
-    ids = subset[cfg["columns"]["id"]].astype(str).tolist()
-    y_true = subset[cfg["columns"]["label"]].astype(int).to_numpy()
-    y_pred = y_true.copy()
-    y_pred[0] = (y_pred[0] + 1) % 3
-    merged = attach_predictions(subset, ids, y_true, y_pred, cfg)
-    assert merged["is_error"].sum() == 1
-    errors = error_slice(merged, cfg)
-    assert len(errors) == 1
-    pairs = confusion_pairs(merged)
-    assert pairs[0]["count"] == 1
+def test_binary_metrics_known_confusion_matrix() -> None:
+    """Grouped metrics match the fixed known confusion matrix."""
+    result = binary_metrics(CONFUSION_MATRIX)
+    overall_accuracy = np.trace(CONFUSION_MATRIX) / CONFUSION_MATRIX.sum()
+
+    assert round(float(overall_accuracy), 4) == 0.7808
+    assert {
+        key: round(value, 4)
+        for key, value in result["genuine_vs_deceptive"].items()
+    } == {
+        "accuracy": 0.8733,
+        "precision": 0.9840,
+        "recall": 0.8655,
+    }
+    assert {
+        key: round(value, 4)
+        for key, value in result["human_vs_ai_generated"].items()
+    } == {
+        "accuracy": 0.8904,
+        "precision": 0.9060,
+        "recall": 0.7297,
+    }
+
+
+def test_error_breakdown_known_confusion_matrix() -> None:
+    """Error counts and shares are sorted correctly for the fixed matrix."""
+    result = error_breakdown(CONFUSION_MATRIX)
+
+    assert int(result["count"].sum()) == 128
+    assert result.iloc[0]["true_class"] == 1
+    assert result.iloc[0]["predicted_class"] == 0
+    assert result.iloc[0]["count"] == 60
+    assert round(float(result.iloc[0]["share_of_errors"]), 4) == 0.4688
+    assert result.iloc[1]["true_class"] == 2
+    assert result.iloc[1]["predicted_class"] == 1
+    assert result.iloc[1]["count"] == 43
